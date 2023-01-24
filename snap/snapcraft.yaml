@@ -1,4 +1,4 @@
-name: hotsos
+name: asana-to-jira 
 version: '1.0'
 summary: Extract Asana data and import into Jira
 description:

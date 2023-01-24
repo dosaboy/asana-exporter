@@ -59,7 +59,9 @@ class AsanaExtractor(object):
             with open(self.teams_json, 'w') as fd:
                 fd.write(json.dumps(teams))
 
-        print("INFO: loaded {} teams".format(len(teams)))
+            print("INFO: saved {} teams".format(len(teams)))
+
+        print("INFO: fetched {} teams".format(len(teams)))
         return teams
 
     def get_projects(self):
@@ -78,7 +80,9 @@ class AsanaExtractor(object):
             with open(self.projects_json, 'w') as fd:
                 fd.write(json.dumps(projects))
 
-        print("INFO: loaded {} projects".format(len(projects)))
+            print("INFO: saved {} projects".format(len(projects)))
+
+        print("INFO: fetched {} projects".format(len(projects)))
         return projects
 
     def get_project_templates(self):
@@ -101,7 +105,9 @@ class AsanaExtractor(object):
             with open(os.path.join(root_path, 'templates.json'), 'w') as fd:
                 fd.write(json.dumps(templates))
 
-        print("INFO: loaded {} templates".format(len(templates)))
+            print("INFO: saved {} templates".format(len(templates)))
+
+        print("INFO: fetched {} templates".format(len(templates)))
         return templates
 
     def get_project_tasks(self, project):
@@ -130,7 +136,9 @@ class AsanaExtractor(object):
             with open(os.path.join(root_path, 'tasks.json'), 'w') as fd:
                 fd.write(json.dumps(tasks))
 
-        print("INFO: loaded {} tasks".format(len(tasks)))
+            print("INFO: saved {} tasks".format(len(tasks)))
+
+        print("INFO: fetched {} tasks".format(len(tasks)))
         return tasks
 
     def get_task_stories(self, project, task):
@@ -158,7 +166,9 @@ class AsanaExtractor(object):
                       'w') as fd:
                 fd.write(json.dumps(stories))
 
-        print("INFO: loaded {} stories".format(len(stories)))
+            print("INFO: saved {} stories".format(len(stories)))
+
+        print("INFO: fetched {} stories".format(len(stories)))
         return stories
 
     def load(self):
@@ -173,7 +183,7 @@ class AsanaExtractor(object):
                     self.get_task_stories(p, t)
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--token', type=str,
                         default=None, required=True, help="Asana api token")
@@ -184,3 +194,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     AsanaExtractor(token=args.token, workspace=args.workspace,
                    teamname=args.team).load()
+
+
+if __name__ == "__main__":
+    main()
