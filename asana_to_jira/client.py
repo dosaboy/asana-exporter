@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import time
 import threading
 
@@ -22,10 +23,14 @@ def with_lock(f):
 
 class AsanaExtractor(object):
 
-    def __init__(self, token, workspace, teamname, export_path):
-        self.export_path = export_path
+    def __init__(self, token, workspace, teamname, export_path,
+                 projects_include_filter=None,
+                 project_exclude_filter=None):
         self.workspace = workspace
         self.teamname = teamname
+        self.export_path = export_path
+        self.projects_include_filter = projects_include_filter
+        self.project_exclude_filter = project_exclude_filter
         self.client = asana.Client.access_token(token)
         if not os.path.isdir(self.export_path):
             os.makedirs(self.export_path)
@@ -82,22 +87,34 @@ class AsanaExtractor(object):
         return os.path.join(self.export_path_team, 'stories')
 
     def get_projects(self):
+        print("INFO: fetching projects")
+        projects = []
+        for p in self.client.projects.find_by_workspace(
+                                                  workspace=self.workspace,
+                                                  team=self.team['gid']):
+            if self.projects_include_filter:
+                if not re.search(self.projects_include_filter, p['name']):
+                    print("INFO: ignoring project {}".format(p['name']))
+                    continue
+
+            if self.project_exclude_filter:
+                if re.search(self.project_exclude_filter, p['name']):
+                    print("INFO: ignoring project {}".format(p['name']))
+                    continue
+
+            projects.append(p)
+
+        print("INFO: updating project cache")
         if os.path.exists(self.projects_json):
-            print("INFO: using cached projects")
             with open(self.projects_json) as fd:
-                projects = json.loads(fd.read())
-        else:
-            print("INFO: fetching projects")
-            projects = []
-            for p in self.client.projects.find_by_workspace(
-                                                      workspace=self.workspace,
-                                                      team=self.team['gid']):
-                projects.append(p)
+                _projects = json.loads(fd.read())
 
-            with open(self.projects_json, 'w') as fd:
-                fd.write(json.dumps(projects))
+            for p in _projects:
+                if p not in projects:
+                    projects.append(p)
 
-            print("INFO: saved {} projects".format(len(projects)))
+        with open(self.projects_json, 'w') as fd:
+            fd.write(json.dumps(projects))
 
         print("INFO: fetched {} projects".format(len(projects)))
         return projects
@@ -230,9 +247,20 @@ def main():
     parser.add_argument('--export-path', type=str,
                         default='asana_export', required=False,
                         help="Path where data is saved.")
+    parser.add_argument('--exclude-projects', type=str,
+                        default=None, required=False,
+                        help=("Regular expression filter used to exclude "
+                              "projects."))
+    parser.add_argument('--projects-filter', type=str,
+                        default=None, required=False,
+                        help=("Regular expression filter used to include "
+                              "projects."))
+
     args = parser.parse_args()
     AsanaExtractor(token=args.token, workspace=args.workspace,
-                   teamname=args.team, export_path=args.export_path).run()
+                   teamname=args.team, export_path=args.export_path,
+                   projects_include_filter=args.projects_filter,
+                   project_exclude_filter=args.exclude_projects).run()
 
 
 if __name__ == "__main__":
