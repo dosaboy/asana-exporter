@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import time
+import threading
+
 import asana
 import json
+
 from functools import cached_property
 
-EXPORT_DIR = 'asana_export'
+LOCK = threading.Lock()
 
 
 class AsanaExtractor(object):
 
-    def __init__(self, token, workspace, teamname):
+    def __init__(self, token, workspace, teamname, export_path):
+        self.export_path = export_path
         self.workspace = workspace
         self.teamname = teamname
         self.client = asana.Client.access_token(token)
-        if not os.path.isdir(EXPORT_DIR):
-            os.makedirs(EXPORT_DIR)
+        if not os.path.isdir(self.export_path):
+            os.makedirs(self.export_path)
 
     @cached_property
     def team(self):
@@ -27,23 +32,23 @@ class AsanaExtractor(object):
 
     @property
     def teams_json(self):
-        return os.path.join(EXPORT_DIR, 'teams.json')
+        return os.path.join(self.export_path, 'teams.json')
 
     @property
     def projects_json(self):
-        return os.path.join(EXPORT_DIR, 'projects.json')
+        return os.path.join(self.export_path, 'projects.json')
 
     @property
     def projects_dir(self):
-        return os.path.join(EXPORT_DIR, 'projects')
+        return os.path.join(self.export_path, 'projects')
 
     @property
     def tasks_dir(self):
-        return os.path.join(EXPORT_DIR, 'tasks')
+        return os.path.join(self.export_path, 'tasks')
 
     @property
     def stories_dir(self):
-        return os.path.join(EXPORT_DIR, 'stories')
+        return os.path.join(self.export_path, 'stories')
 
     def get_teams(self):
         if os.path.exists(self.teams_json):
@@ -115,28 +120,30 @@ class AsanaExtractor(object):
         if os.path.exists(os.path.join(root_path, 'tasks.json')):
             print("INFO: using cached tasks for project '{}'".
                   format(project['name']))
-            with open(os.path.join(root_path, 'tasks.json')) as fd:
-                tasks = json.loads(fd.read())
+            with LOCK:
+                with open(os.path.join(root_path, 'tasks.json')) as fd:
+                    tasks = json.loads(fd.read())
         else:
             print("INFO: fetching tasks for project '{}'".
                   format(project['name']))
             path = os.path.join(root_path, 'tasks')
-            os.makedirs(path)
+            with LOCK:
+                os.makedirs(path)
 
-            tasks = []
-            for t in self.client.projects.tasks(project['gid']):
-                tasks.append(t)
+                tasks = []
+                for t in self.client.projects.tasks(project['gid']):
+                    tasks.append(t)
 
-            for t in tasks:
-                if os.path.exists(os.path.join(path, t['gid'])):
-                    continue
+                for t in tasks:
+                    if os.path.exists(os.path.join(path, t['gid'])):
+                        continue
 
-                os.makedirs(os.path.join(path, t['gid']))
+                    os.makedirs(os.path.join(path, t['gid']))
 
-            with open(os.path.join(root_path, 'tasks.json'), 'w') as fd:
-                fd.write(json.dumps(tasks))
+                with open(os.path.join(root_path, 'tasks.json'), 'w') as fd:
+                    fd.write(json.dumps(tasks))
 
-            print("INFO: saved {} tasks".format(len(tasks)))
+                print("INFO: saved {} tasks".format(len(tasks)))
 
         print("INFO: fetched {} tasks".format(len(tasks)))
         return tasks
@@ -144,43 +151,62 @@ class AsanaExtractor(object):
     def get_task_stories(self, project, task):
         root_path = os.path.join(self.projects_dir, project['gid'], 'tasks',
                                  task['gid'])
+        p_name = project['name'].strip()
+        t_name = task['name'].strip()
         if os.path.exists(os.path.join(root_path, 'stories.json')):
             print("INFO: using cached stories for project '{}' task '{}'".
-                  format(project['name'], task['name']))
-            with open(os.path.join(root_path, 'stories.json')) as fd:
-                stories = json.loads(fd.read())
+                  format(p_name, t_name))
+            with LOCK:
+                with open(os.path.join(root_path, 'stories.json')) as fd:
+                    stories = json.loads(fd.read())
         else:
-            print("INFO: fetching stories for task '{}'".format(task['name']))
+            print("INFO: fetching stories for project='{}' task='{}'".
+                  format(p_name, t_name))
             path = os.path.join(root_path, 'stories')
-            os.makedirs(path)
+            with LOCK:
+                os.makedirs(path)
 
-            stories = []
-            for s in self.client.stories.find_by_task(task['gid']):
-                stories.append(s)
+                stories = []
+                for s in self.client.stories.find_by_task(task['gid']):
+                    stories.append(s)
 
-            for s in stories:
-                with open(os.path.join(path, s['gid']), 'w') as fd:
-                    fd.write(json.dumps(s))
+                for s in stories:
+                    with open(os.path.join(path, s['gid']), 'w') as fd:
+                        fd.write(json.dumps(s))
 
-            with open(os.path.join(root_path, 'stories.json'),
-                      'w') as fd:
-                fd.write(json.dumps(stories))
+                with open(os.path.join(root_path, 'stories.json'),
+                          'w') as fd:
+                    fd.write(json.dumps(stories))
 
-            print("INFO: saved {} stories".format(len(stories)))
+                print("INFO: saved {} stories".format(len(stories)))
 
         print("INFO: fetched {} stories".format(len(stories)))
         return stories
 
-    def load(self):
-        print("INFO: starting extraction")
-        if not os.path.isdir(EXPORT_DIR):
-            os.makedirs(EXPORT_DIR)
+    def run_job(self, project):
+        for t in self.get_project_tasks(project):
+            self.get_task_stories(project, t)
+
+    def run(self):
+        print("INFO: starting extraction to {}".format(self.export_path))
+        start = time.time()
+
+        if not os.path.isdir(self.export_path):
+            os.makedirs(self.export_path)
 
         self.get_project_templates()
+        threads = []
         for p in self.get_projects():
-            if 'handover' in p['name'].lower():
-                for t in self.get_project_tasks(p):
-                    self.get_task_stories(p, t)
+            t = threading.Thread(target=self.run_job, args=[p])
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        end = time.time()
+        print("INFO: extraction completed in {} secs.".
+              format(round(end - start, 3)))
 
 
 def main():
@@ -191,9 +217,12 @@ def main():
                         default=None, required=True, help="Asana workspace ID")
     parser.add_argument('--team', type=str,
                         default=None, required=True, help="Asana team name")
+    parser.add_argument('--export-path', type=str,
+                        default='asana_export', required=False,
+                        help="Path where data is saved.")
     args = parser.parse_args()
     AsanaExtractor(token=args.token, workspace=args.workspace,
-                   teamname=args.team).load()
+                   teamname=args.team, export_path=args.export_path).run()
 
 
 if __name__ == "__main__":
