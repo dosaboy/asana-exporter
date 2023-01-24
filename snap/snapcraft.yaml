@@ -1,0 +1,19 @@
+name: hotsos
+version: '1.0'
+summary: Extract Asana data and import into Jira
+description:
+  Extract Asana data and import into Jira
+confinement: strict
+grade: stable
+base: core22
+
+apps:
+  asana-to-jira:
+    command: bin/asana-to-jira
+parts:
+  asana-to-jira:
+    plugin: python
+    source: .
+    requirements:
+      - requirements.txt
+
