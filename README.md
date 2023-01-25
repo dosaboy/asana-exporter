@@ -1,15 +1,36 @@
 # Overview
 
-Extracts Asana projects along with their tasks and resources and saved in a tree structure of json files making it easy to import into Jira.
+Extracts Asana projects along with their resources such as tasks and stories and saves as json in a tree structure  making it easy to query with tools like [jq](https://stedolan.github.io/jq/) and import into Jira.
 
 The Jira import part is still TODO.
 
 ## Usage
 
-You will first need to generate a Personal Access Token. See https://developers.asana.com/docs/personal-access-token for instructions on how to do this.
+The first action to take is extract information from Asana using the API. To do this you will need to generate a Personal Access Token. See https://developers.asana.com/docs/personal-access-token for instructions on how to do this.
 
-Once you have this run the tool as follows. See https://developers.asana.com/docs/workspaces on workspaces, this is usually your organisation name. The tool must be run in the context of a team. You can run it multile times to get information from multiple teams and they will be aggregated under the export path.
+Once you have a token run the tool as follows to extract data. A team name and workspace are required (see https://developers.asana.com/docs/workspaces - this is usually your organisation name). Projects are extracted in the context of a team. You can extract multiple teams projects into the same archive by running the tool multiple times with different teams.
 
 ```
-./asana_to_jira/client.py --token MY_TOKEN --workspace WORKSPACE_ID --team MY_TEAM
+./asana_to_jira/client.py --token TOKEN --workspace WORKSPACE --team TEAM --export-path PATH
 ```
+
+Once complete, your data will be under PATH and you can query it e.g.
+
+List all teams found:
+
+```
+./asana_to_jira/client.py --export-path PATH --list-teams
+```
+
+List all extracted projects for a given team:
+
+```
+./asana_to_jira/client.py --export-path PATH --team "My Team" --list-projects
+```
+
+List all extracted tasks for a given project:
+
+```
+./asana_to_jira/client.py --export-path PATH --team "My Team" --list-project-tasks "My Project"
+```
+
