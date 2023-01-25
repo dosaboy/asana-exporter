@@ -4,6 +4,13 @@ Extracts Asana projects along with their resources such as tasks and stories and
 
 The Jira import part is still TODO.
 
+## Install
+
+```
+sudo apt install python3-pip
+pip install -r requirements.txt
+```
+
 ## Usage
 
 The first action to take is extract information from Asana using the API. To do this you will need to generate a Personal Access Token. See https://developers.asana.com/docs/personal-access-token for instructions on how to do this.
