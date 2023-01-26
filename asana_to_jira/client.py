@@ -23,12 +23,16 @@ def with_lock(f):
 
 
 def required(opts):
+    """
+    @param opts: dict where key is attr name and val is opt name.
+    """
     def _required(f):
         def _inner_required(self, *args, **kwargs):
-            if not all([getattr(self, o) for o in opts]):
-                opts_fmtd = ['--{}'.format(o) for o in opts]
+            has = all([hasattr(self, o) for o in opts])
+            if not has or not all([getattr(self, o) for o in opts]):
                 msg = ("one or more of the following required options have "
-                       "not been provided: {}".format(', '.join(opts_fmtd)))
+                       "not been provided: {}".
+                       format(', '.join(opts.values())))
                 raise Exception(msg)
             return f(self, *args, **kwargs)
 
@@ -84,11 +88,11 @@ class AsanaResourceBase(abc.ABC):
 class AsanaProjects(AsanaResourceBase):
 
     def __init__(self, client, workspace, team,
-                 projects_include_filter, project_exclude_filter,
+                 project_include_filter, project_exclude_filter,
                  projects_json):
         self.client = client
         self.workspace = workspace
-        self.projects_include_filter = projects_include_filter
+        self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
         self.projects_json = projects_json
         self.team = team
@@ -116,8 +120,8 @@ class AsanaProjects(AsanaResourceBase):
                                                   workspace=self.workspace,
                                                   team=self.team['gid']):
             total += 1
-            if self.projects_include_filter:
-                if not re.search(self.projects_include_filter, p['name']):
+            if self.project_include_filter:
+                if not re.search(self.project_include_filter, p['name']):
                     ignored.append(p['name'])
                     continue
 
@@ -250,23 +254,20 @@ class AsanaProjectTaskStories(AsanaResourceBase):
 class AsanaExtractor(object):
 
     def __init__(self, token, workspace, teamname, export_path,
-                 projects_include_filter=None,
+                 project_include_filter=None,
                  project_exclude_filter=None):
         self._workspace = workspace
         self.teamname = teamname
         self.export_path = export_path
-        self.projects_include_filter = projects_include_filter
+        self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
         self.token = token
         if not os.path.isdir(self.export_path):
             os.makedirs(self.export_path)
 
     @cached_property
-    @required(['token', '_workspace', 'teamname'])
+    @required({'token': '--token'})
     def client(self):
-        if not self.token:
-            raise Exception("api oauth token must be provided with --token")
-
         return asana.Client.access_token(self.token)
 
     @cached_property
@@ -307,6 +308,8 @@ class AsanaExtractor(object):
         return teams
 
     @cached_property
+    @required({'token': '--token', '_workspace': '--workspace',
+               'teamname': '--team'})
     def team(self):
         for t in self.get_teams():
             if t['name'] == self.teamname:
@@ -334,6 +337,7 @@ class AsanaExtractor(object):
     def stories_dir(self):
         return os.path.join(self.export_path_team, 'stories')
 
+    @required({'teamname': '--team'})
     def get_projects(self, update_from_api=True):
         """
         Fetch projects owned by a give team. By default this will get projects
@@ -343,7 +347,7 @@ class AsanaExtractor(object):
         project filters.
         """
         return AsanaProjects(self.client, self.workspace, self.team,
-                             self.projects_include_filter,
+                             self.project_include_filter,
                              self.project_exclude_filter,
                              self.projects_json).get(update_from_api,
                                                      prefer_cache=False)
@@ -429,7 +433,7 @@ def main():
                         default=None,
                         help=("Regular expression filter used to exclude "
                               "projects."))
-    parser.add_argument('--projects-filter', type=str,
+    parser.add_argument('--project-filter', type=str,
                         default=None,
                         help=("Regular expression filter used to include "
                               "projects."))
@@ -457,7 +461,7 @@ def main():
     args = parser.parse_args()
     ae = AsanaExtractor(token=args.token, workspace=args.workspace,
                         teamname=args.team, export_path=args.export_path,
-                        projects_include_filter=args.projects_filter,
+                        project_include_filter=args.project_filter,
                         project_exclude_filter=args.exclude_projects)
     if args.list_teams:
         teams = ae.get_teams()
@@ -465,11 +469,6 @@ def main():
             print("\nTeams:")
             print('\n'.join([t['name'] for t in teams]))
     elif args.list_projects:
-        if not all([args.team]):
-            msg = ("one or more of the following required options have not "
-                   "been provided: --team")
-            raise Exception(msg)
-
         projects = ae.get_projects(update_from_api=False)
         if projects:
             print("\nProjects:")
