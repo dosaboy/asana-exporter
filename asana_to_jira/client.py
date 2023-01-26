@@ -8,6 +8,8 @@ import threading
 
 import asana
 import json
+import urllib
+import urllib.request
 
 from functools import cached_property
 
@@ -260,6 +262,16 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
 
+    def _download(self, url, path):
+        LOG.info("downloading {} to {}".format(url, path))
+        rq = urllib.request.Request(url=url)
+        with urllib.request.urlopen(rq) as url_fd:
+            with open(path, 'wb') as fd:
+                out = 'SOF'
+                while out:
+                    out = url_fd.read(4096)
+                    fd.write(out)
+
     def _from_local(self):
         attachments = []
         p_gid = self.project['gid'].strip()
@@ -288,8 +300,14 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         for s in attachments:
             # convert "compact" record to "full"
             with open(os.path.join(path, s['gid']), 'w') as fd:
-                fd.write(json.dumps(self.client.attachments.
-                                    find_by_id(s['gid'])))
+                s = self.client.attachments.find_by_id(s['gid'])
+                fd.write(json.dumps(s))
+                url = s['download_url']
+                if url:
+                    self._download(url,
+                                   os.path.join(path,
+                                                "{}_{}".format(s['gid'],
+                                                               'download')))
 
         with open(os.path.join(self.root_path, 'attachments.json'),
                   'w') as fd:
