@@ -10,12 +10,12 @@ def get_dependencies():
 
 
 setup(
-    name='asana_to_jira',
+    name='asana_exporter',
     version='1.0.0',
-    packages=find_packages(include=['asana_to_jira*']),
+    packages=find_packages(include=['asana_exporter*']),
     install_requires=get_dependencies(),
     entry_points={
       'console_scripts': [
-        'asana-to-jira=asana_to_jira.client:main']
+        'asana-exporter=asana_exporter.client:main']
     }
 )

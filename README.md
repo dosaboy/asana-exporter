@@ -1,8 +1,6 @@
 # Overview
 
-Extracts Asana projects along with their resources such as tasks and stories and saves as json in a tree structure  making it easy to query with tools like [jq](https://stedolan.github.io/jq/) and import into Jira.
-
-The Jira import part is still TODO.
+Exports Asana projects along with their resources such as tasks and stories and saves as json in a tree structure  making it easy to query with tools like [jq](https://stedolan.github.io/jq/) and import into other tools like Jira.
 
 ## Install
 
@@ -16,7 +14,7 @@ pip install -r requirements.txt
 From snap:
 
 ```
-sudo snap install asana-to-jira
+sudo snap install asana-exporter
 ```
 
 ## Usage
@@ -26,7 +24,7 @@ The first action to take is extract information from Asana using the API. To do 
 Once you have a token run the tool as follows to extract data. A team name and workspace are required (see https://developers.asana.com/docs/workspaces - this is usually your organisation name). Projects are extracted in the context of a team. You can extract multiple teams projects into the same archive by running the tool multiple times with different teams.
 
 ```
-./asana_to_jira/client.py --token TOKEN --workspace WORKSPACE --team TEAM --export-path PATH
+asana-exporter --token TOKEN --workspace WORKSPACE --team TEAM --export-path PATH
 ```
 
 Once complete, your data will be under PATH and you can query it e.g.
@@ -34,18 +32,18 @@ Once complete, your data will be under PATH and you can query it e.g.
 List all teams found:
 
 ```
-./asana_to_jira/client.py --export-path PATH --list-teams
+asana-exporter --export-path PATH --list-teams
 ```
 
 List all extracted projects for a given team:
 
 ```
-./asana_to_jira/client.py --export-path PATH --team "My Team" --list-projects
+asana-exporter --export-path PATH --team "My Team" --list-projects
 ```
 
 List all extracted tasks for a given project:
 
 ```
-./asana_to_jira/client.py --export-path PATH --team "My Team" --list-project-tasks "My Project"
+asana-exporter --export-path PATH --team "My Team" --list-project-tasks "My Project"
 ```
 
