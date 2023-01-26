@@ -21,6 +21,24 @@ def with_lock(f):
     return with_lock_inner
 
 
+class Logger(object):
+
+    def debug(self, msg):
+        print("DEBUG: {}".format(msg))
+
+    def info(self, msg):
+        print("INFO: {}".format(msg))
+
+    def warning(self, msg):
+        print("WARNING: {}".format(msg))
+
+    def error(self, msg):
+        print("ERROR: {}".format(msg))
+
+
+LOG = Logger()
+
+
 class AsanaExtractor(object):
 
     def __init__(self, token, workspace, teamname, export_path,
@@ -50,8 +68,8 @@ class AsanaExtractor(object):
         try:
             return int(self._workspace)
         except ValueError:
-            print("INFO: resolving workspace gid from name '{}'".
-                  format(self._workspace))
+            LOG.info("resolving workspace gid from name '{}'".
+                     format(self._workspace))
             return [w['gid'] for w in self.client.workspaces.find_all()
                     if w['name'] == self._workspace][0]
 
@@ -59,14 +77,14 @@ class AsanaExtractor(object):
     def teams_json(self):
         return os.path.join(self.export_path, 'teams.json')
 
-    def get_teams(self, update_from_api=True):
+    def get_teams(self):
         teams = []
         if os.path.exists(self.teams_json):
-            print("INFO: using cached teams")
+            LOG.info("using cached teams")
             with open(self.teams_json) as fd:
                 teams = json.loads(fd.read())
-        elif update_from_api:
-            print("INFO: fetching teams")
+        else:
+            LOG.info("fetching teams from api")
             teams = []
             for p in self.client.teams.find_by_organization(self.workspace):
                 teams.append(p)
@@ -74,9 +92,9 @@ class AsanaExtractor(object):
             with open(self.teams_json, 'w') as fd:
                 fd.write(json.dumps(teams))
 
-            print("INFO: saved {} teams".format(len(teams)))
+            LOG.info("saved {} teams".format(len(teams)))
 
-        print("INFO: fetched {} teams".format(len(teams)))
+        LOG.info("fetched {} teams".format(len(teams)))
         return teams
 
     @cached_property
@@ -110,66 +128,76 @@ class AsanaExtractor(object):
     def get_projects(self, update_from_api=True):
         """
         Fetch projects owned by a give team. By default this will get projects
-        from the Asana api and add them to the extraction archive. This process
-        is additive and can be repeated to update an existing cache/archive but
-        is not subtractive so if a project is deleted from Asana it will remain
-        in the archive.
+        from the Asana api and add them to the extraction archive.
 
         Since the api can be slow, it is recommended to use the available
         project filters.
         """
         projects = []
-        print("INFO: fetching projects")
         if not update_from_api:
             if not os.path.exists(self.projects_json):
-                print("INFO: no cached projects to list")
+                LOG.info("no cached projects to list")
                 return projects
 
+            LOG.info("fetching projects from cache")
             with open(self.projects_json) as fd:
                 projects = json.loads(fd.read())
         else:
+            LOG.info("fetching projects from api")
+            total = 0
+            ignored = []
             for p in self.client.projects.find_by_workspace(
                                                       workspace=self.workspace,
                                                       team=self.team['gid']):
+                total += 1
                 if self.projects_include_filter:
                     if not re.search(self.projects_include_filter, p['name']):
-                        print("INFO: ignoring project {}".format(p['name']))
+                        ignored.append(p['name'])
                         continue
 
                 if self.project_exclude_filter:
                     if re.search(self.project_exclude_filter, p['name']):
-                        print("INFO: ignoring project {}".format(p['name']))
+                        ignored.append(p['name'])
                         continue
 
                 projects.append(p)
 
-            print("INFO: updating project cache")
-            if os.path.exists(self.projects_json):
-                with open(self.projects_json) as fd:
-                    _projects = json.loads(fd.read())
+            if ignored:
+                LOG.info("ignoring projects:\n  {}".
+                         format('\n  '.join(ignored)))
 
-                for p in _projects:
-                    if p not in projects:
-                        projects.append(p)
+            LOG.info("saving {}/{} projects".format(len(projects), total))
+            if projects:
+                LOG.info("updating project cache")
+                """
+                if os.path.exists(self.projects_json):
+                    with open(self.projects_json) as fd:
+                        _projects = json.loads(fd.read())
 
-            with open(self.projects_json, 'w') as fd:
-                fd.write(json.dumps(projects))
+                    for p in _projects:
+                        if p not in projects:
+                            projects.append(p)
+                """
 
-        print("INFO: fetched {} projects for team '{}'".
-              format(len(projects), self.team['name']))
+                with open(self.projects_json, 'w') as fd:
+                    fd.write(json.dumps(projects))
+
+        LOG.info("fetched {} projects for team '{}'".
+                 format(len(projects), self.team['name']))
         return projects
 
     def get_project_templates(self):
         root_path = path = os.path.join(self.projects_dir)
         if os.path.exists(os.path.join(root_path, 'templates.json')):
-            print("INFO: using cached project templates")
+            LOG.info("using cached project templates")
             with open(os.path.join(root_path, 'templates.json')) as fd:
                 templates = json.loads(fd.read())
         else:
-            print("INFO: fetching project templates for team '{}'".
-                  format(self.team['name']))
+            LOG.info("fetching project templates for team '{}' from api".
+                     format(self.team['name']))
             path = os.path.join(root_path, 'templates')
-            os.makedirs(path)
+            if not os.path.isdir(path):
+                os.makedirs(path)
 
             templates = []
             for t in self.client.projects.find_by_team(team=self.team['gid'],
@@ -179,9 +207,7 @@ class AsanaExtractor(object):
             with open(os.path.join(root_path, 'templates.json'), 'w') as fd:
                 fd.write(json.dumps(templates))
 
-            print("INFO: saved {} templates".format(len(templates)))
-
-        print("INFO: fetched {} templates".format(len(templates)))
+        LOG.info("fetched {} templates".format(len(templates)))
         return templates
 
     @with_lock
@@ -189,32 +215,35 @@ class AsanaExtractor(object):
         tasks = []
         root_path = path = os.path.join(self.projects_dir, project['gid'])
         if os.path.exists(os.path.join(root_path, 'tasks.json')):
-            print("INFO: using cached tasks for project '{}'".
-                  format(project['name']))
+            LOG.info("fetching tasks for project '{}' from cache".
+                     format(project['name']))
             with open(os.path.join(root_path, 'tasks.json')) as fd:
                 tasks = json.loads(fd.read())
         elif update_from_api:
-            print("INFO: fetching tasks for project '{}'".
-                  format(project['name']))
+            LOG.info("fetching tasks for project '{}' from api".
+                     format(project['name']))
             path = os.path.join(root_path, 'tasks')
-            os.makedirs(path)
+            if not os.path.isdir(path):
+                os.makedirs(path)
 
             tasks = []
             for t in self.client.projects.tasks(project['gid']):
                 tasks.append(t)
 
             for t in tasks:
-                if os.path.exists(os.path.join(path, t['gid'])):
+                task_path = os.path.join(path, t['gid'])
+                if os.path.exists(task_path):
                     continue
 
-                os.makedirs(os.path.join(path, t['gid']))
+                if not os.path.isdir(task_path):
+                    os.makedirs(task_path)
 
             with open(os.path.join(root_path, 'tasks.json'), 'w') as fd:
                 fd.write(json.dumps(tasks))
 
-            print("INFO: saved {} tasks".format(len(tasks)))
+            LOG.info("saved {} tasks".format(len(tasks)))
 
-        print("INFO: fetched {} tasks".format(len(tasks)))
+        LOG.info("fetched {} tasks".format(len(tasks)))
         return tasks
 
     @with_lock
@@ -224,15 +253,16 @@ class AsanaExtractor(object):
         p_name = project['name'].strip()
         t_name = task['name'].strip()
         if os.path.exists(os.path.join(root_path, 'stories.json')):
-            print("INFO: using cached stories for project '{}' task '{}'".
-                  format(p_name, t_name))
+            LOG.info("fetching stories for project '{}' task '{}' from cache".
+                     format(p_name, t_name))
             with open(os.path.join(root_path, 'stories.json')) as fd:
                 stories = json.loads(fd.read())
         else:
-            print("INFO: fetching stories for project='{}' task='{}'".
-                  format(p_name, t_name))
+            LOG.info("fetching stories for project='{}' task='{}' from api".
+                     format(p_name, t_name))
             path = os.path.join(root_path, 'stories')
-            os.makedirs(path)
+            if not os.path.isdir(path):
+                os.makedirs(path)
 
             stories = []
             for s in self.client.stories.find_by_task(task['gid']):
@@ -246,9 +276,9 @@ class AsanaExtractor(object):
                       'w') as fd:
                 fd.write(json.dumps(stories))
 
-            print("INFO: saved {} stories".format(len(stories)))
+            LOG.info("saved {} stories".format(len(stories)))
 
-        print("INFO: fetched {} stories".format(len(stories)))
+        LOG.info("fetched {} stories".format(len(stories)))
         return stories
 
     def run_job(self, project):
@@ -256,7 +286,7 @@ class AsanaExtractor(object):
             self.get_task_stories(project, t)
 
     def run(self):
-        print("INFO: starting extraction to {}".format(self.export_path_team))
+        LOG.info("starting extraction to {}".format(self.export_path_team))
         start = time.time()
 
         if not os.path.isdir(self.export_path_team):
@@ -273,8 +303,8 @@ class AsanaExtractor(object):
             t.join()
 
         end = time.time()
-        print("INFO: extraction completed in {} secs.".
-              format(round(end - start, 3)))
+        LOG.info("extraction completed in {} secs.".
+                 format(round(end - start, 3)))
 
 
 def main():
@@ -300,10 +330,10 @@ def main():
                               "projects."))
     parser.add_argument('--list-teams', action='store_true',
                         default=False,
-                        help=("List all cached teams. This will only "
+                        help=("List all teams. This will "
                               "return teams retrieved from an existing "
-                              "extraction archive and will not perform any "
-                              "api calls."))
+                              "extraction archive and if not available will "
+                              "query the api."))
     parser.add_argument('--list-projects', action='store_true',
                         default=False,
                         help=("List all cached projects. This will only "
@@ -325,7 +355,7 @@ def main():
                         projects_include_filter=args.projects_filter,
                         project_exclude_filter=args.exclude_projects)
     if args.list_teams:
-        teams = ae.get_teams(update_from_api=False)
+        teams = ae.get_teams()
         if teams:
             print("\nTeams:")
             print('\n'.join([t['name'] for t in teams]))
