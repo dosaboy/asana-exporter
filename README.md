@@ -6,9 +6,17 @@ The Jira import part is still TODO.
 
 ## Install
 
+From source:
+
 ```
 sudo apt install python3-pip
 pip install -r requirements.txt
+```
+
+From snap:
+
+```
+sudo snap install asana-to-jira
 ```
 
 ## Usage
