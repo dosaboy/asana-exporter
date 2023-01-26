@@ -251,6 +251,54 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         return stories
 
 
+class AsanaProjectTaskAttachments(AsanaResourceBase):
+
+    def __init__(self, client, project, projects_dir, task):
+        self.client = client
+        self.project = project
+        self.task = task
+        self.root_path = os.path.join(projects_dir, project['gid'],
+                                      'tasks', task['gid'])
+
+    def _from_local(self):
+        attachments = []
+        p_gid = self.project['gid'].strip()
+        t_name = self.task['name'].strip()
+        if os.path.exists(os.path.join(self.root_path, 'attachments.json')):
+            LOG.info("fetching attachments for task '{}' (project={}) from "
+                     "cache".format(t_name, p_gid))
+            with open(os.path.join(self.root_path, 'attachments.json')) as fd:
+                attachments = json.loads(fd.read())
+
+        return attachments
+
+    def _from_api(self):
+        p_gid = self.project['gid'].strip()
+        t_name = self.task['name'].strip()
+        LOG.info("fetching attachments for task='{}' (project gid={}) from "
+                 "api".format(t_name, p_gid))
+        path = os.path.join(self.root_path, 'attachments')
+        if not os.path.isdir(path):
+            os.makedirs(path)
+
+        attachments = []
+        for s in self.client.attachments.find_by_task(self.task['gid']):
+            attachments.append(s)
+
+        for s in attachments:
+            # convert "compact" record to "full"
+            with open(os.path.join(path, s['gid']), 'w') as fd:
+                fd.write(json.dumps(self.client.attachments.
+                                    find_by_id(s['gid'])))
+
+        with open(os.path.join(self.root_path, 'attachments.json'),
+                  'w') as fd:
+            fd.write(json.dumps(attachments))
+
+        LOG.info("saved {} attachments".format(len(attachments)))
+        return attachments
+
+
 class AsanaExtractor(object):
 
     def __init__(self, token, workspace, teamname, export_path,
@@ -329,14 +377,6 @@ class AsanaExtractor(object):
     def projects_dir(self):
         return os.path.join(self.export_path_team, 'projects')
 
-    @property
-    def tasks_dir(self):
-        return os.path.join(self.export_path_team, 'tasks')
-
-    @property
-    def stories_dir(self):
-        return os.path.join(self.export_path_team, 'stories')
-
     @required({'teamname': '--team'})
     def get_projects(self, update_from_api=True):
         """
@@ -390,9 +430,18 @@ class AsanaExtractor(object):
         return AsanaProjectTaskStories(self.client, project, self.projects_dir,
                                        task).get(update_from_api)
 
+    def get_task_attachments(self, project, task, update_from_api=True):
+        """
+        @param update_from_api: allow fetching from the API.
+        """
+        return AsanaProjectTaskAttachments(self.client, project,
+                                           self.projects_dir,
+                                           task).get(update_from_api)
+
     def run_job(self, project):
         for t in self.get_project_tasks(project):
             self.get_task_stories(project, t)
+            self.get_task_attachments(project, t)
 
     def run(self):
         LOG.info("starting extraction to {}".format(self.export_path_team))
