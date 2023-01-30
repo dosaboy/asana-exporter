@@ -62,6 +62,13 @@ LOG = Logger()
 
 class AsanaResourceBase(abc.ABC):
 
+    @abc.abstractproperty
+    def _local_store(self):
+        """
+        Path to local store of information. If this exists it suggests we have
+        done at least one api request for this resources.
+        """
+
     @abc.abstractmethod
     def _from_api(self):
         """ Fetch resources from the API. """
@@ -77,7 +84,7 @@ class AsanaResourceBase(abc.ABC):
         else:
             objs = []
 
-        if not objs:
+        if not objs and not os.path.exists(self._local_store):
             if update_from_api:
                 objs = self._from_api()
 
@@ -99,15 +106,19 @@ class AsanaProjects(AsanaResourceBase):
         self.projects_json = projects_json
         self.team = team
 
+    @property
+    def _local_store(self):
+        return self.projects_json
+
     def _from_local(self):
         projects = []
         LOG.info("fetching projects for team '{}' from cache".
                  format(self.team['name']))
-        if not os.path.exists(self.projects_json):
+        if not os.path.exists(self._local_store):
             LOG.info("no cached projects to list")
             return projects
 
-        with open(self.projects_json) as fd:
+        with open(self._local_store) as fd:
             projects = json.loads(fd.read())
 
         return projects
@@ -134,6 +145,8 @@ class AsanaProjects(AsanaResourceBase):
 
             projects.append(p)
 
+        # yield
+        time.sleep(0)
         if ignored:
             LOG.info("ignoring projects:\n  {}".
                      format('\n  '.join(ignored)))
@@ -166,14 +179,18 @@ class AsanaProjectTasks(AsanaResourceBase):
         self.project = project
         self.root_path = os.path.join(projects_dir, project['gid'])
 
+    @property
+    def _local_store(self):
+        return os.path.join(self.root_path, 'tasks.json')
+
     def _from_local(self):
         tasks = []
-        if not os.path.exists(os.path.join(self.root_path, 'tasks.json')):
+        if not os.path.exists(self._local_store):
             return tasks
 
         LOG.info("fetching tasks for project '{}' (gid={}) from cache".
                  format(self.project['name'], self.project['gid']))
-        with open(os.path.join(self.root_path, 'tasks.json')) as fd:
+        with open(self._local_store) as fd:
             tasks = json.loads(fd.read())
 
         LOG.info("fetched {} tasks".format(len(tasks)))
@@ -191,6 +208,8 @@ class AsanaProjectTasks(AsanaResourceBase):
         for t in self.client.projects.tasks(self.project['gid']):
             tasks.append(t)
 
+        # yield
+        time.sleep(0)
         for t in tasks:
             task_path = os.path.join(path, t['gid'])
             if os.path.exists(task_path):
@@ -216,11 +235,15 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
 
+    @property
+    def _local_store(self):
+        return os.path.join(self.root_path, 'stories.json')
+
     def _from_local(self):
         stories = []
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
-        if os.path.exists(os.path.join(self.root_path, 'stories.json')):
+        if os.path.exists(self._local_store):
             LOG.info("fetching stories for task '{}' (project={}) from cache".
                      format(t_name, p_gid))
             with open(os.path.join(self.root_path, 'stories.json')) as fd:
@@ -241,6 +264,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         for s in self.client.stories.find_by_task(self.task['gid']):
             stories.append(s)
 
+        # yield
+        time.sleep(0)
         for s in stories:
             with open(os.path.join(path, s['gid']), 'w') as fd:
                 fd.write(json.dumps(s))
@@ -262,6 +287,10 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
 
+    @property
+    def _local_store(self):
+        return os.path.join(self.root_path, 'attachments.json')
+
     def _download(self, url, path):
         LOG.info("downloading {} to {}".format(url, path))
         rq = urllib.request.Request(url=url)
@@ -276,10 +305,10 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         attachments = []
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
-        if os.path.exists(os.path.join(self.root_path, 'attachments.json')):
+        if os.path.exists(self._local_store):
             LOG.info("fetching attachments for task '{}' (project={}) from "
                      "cache".format(t_name, p_gid))
-            with open(os.path.join(self.root_path, 'attachments.json')) as fd:
+            with open(self._local_store) as fd:
                 attachments = json.loads(fd.read())
 
         return attachments
@@ -297,6 +326,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         for s in self.client.attachments.find_by_task(self.task['gid']):
             attachments.append(s)
 
+        # yield
+        time.sleep(0)
         for s in attachments:
             # convert "compact" record to "full"
             with open(os.path.join(path, s['gid']), 'w') as fd:
@@ -428,6 +459,9 @@ class AsanaExtractor(object):
                                                        is_template=True):
                 templates.append(t)
 
+            # yield
+            time.sleep(0)
+
             with open(os.path.join(root_path, 'templates.json'), 'w') as fd:
                 fd.write(json.dumps(templates))
 
@@ -456,11 +490,6 @@ class AsanaExtractor(object):
                                            self.projects_dir,
                                            task).get(update_from_api)
 
-    def run_job(self, project):
-        for t in self.get_project_tasks(project):
-            self.get_task_stories(project, t)
-            self.get_task_attachments(project, t)
-
     def run(self):
         LOG.info("starting extraction to {}".format(self.export_path_team))
         start = time.time()
@@ -471,9 +500,15 @@ class AsanaExtractor(object):
         self.get_project_templates()
         threads = []
         for p in self.get_projects():
-            t = threading.Thread(target=self.run_job, args=[p])
-            t.start()
-            threads.append(t)
+            for t in self.get_project_tasks(p):
+                thread = threading.Thread(target=self.get_task_stories,
+                                          args=[p, t])
+                thread.start()
+                threads.append(thread)
+                thread = threading.Thread(target=self.get_task_attachments,
+                                          args=[p, t])
+                thread.start()
+                threads.append(thread)
 
         for t in threads:
             t.join()
