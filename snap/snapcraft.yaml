@@ -4,7 +4,7 @@ summary: Export data from Asana
 description: |
     Exports data such as projects from Asana and stores them in a format that is easy to import into other tools.
 
-    Project maintained at https://github.com/dosaboy/asana-to-jira
+    Project maintained at https://github.com/dosaboy/asana-exporter
 confinement: strict
 grade: stable
 base: core20
