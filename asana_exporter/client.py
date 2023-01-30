@@ -576,10 +576,6 @@ def main():
             print("\nProjects:")
             print('\n'.join([p['name'] for p in projects]))
     elif args.list_project_tasks:
-        if not all([args.team]):
-            msg = ("one or more of the following required options have not "
-                   "been provided: --team")
-            raise Exception(msg)
         for p in ae.get_projects(update_from_api=False):
             if p['name'] == args.list_project_tasks:
                 tasks = ae.get_project_tasks(p, update_from_api=False)
