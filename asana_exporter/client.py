@@ -226,6 +226,62 @@ class AsanaProjectTasks(AsanaResourceBase):
         return tasks
 
 
+class AsanaTaskSubTasks(AsanaResourceBase):
+
+    def __init__(self, client, project, projects_dir, task):
+        self.client = client
+        self.project = project
+        self.task = task
+        self.root_path = os.path.join(projects_dir, project['gid'],
+                                      'tasks', task['gid'])
+
+    @property
+    def _local_store(self):
+        return os.path.join(self.root_path, 'subtasks.json')
+
+    def _from_local(self):
+        subtasks = []
+        p_gid = self.project['gid'].strip()
+        t_name = self.task['name'].strip()
+        if os.path.exists(self._local_store):
+            LOG.info("fetching subtasks for task '{}' (project={}) from cache".
+                     format(t_name, p_gid))
+            with open(os.path.join(self.root_path, 'subtasks.json')) as fd:
+                subtasks = json.loads(fd.read())
+
+        return subtasks
+
+    def _from_api(self):
+        p_gid = self.project['gid'].strip()
+        t_name = self.task['name'].strip()
+        LOG.info("fetching subtasks for task='{}' (project gid={}) from "
+                 "api".format(t_name, p_gid))
+        path = os.path.join(self.root_path, 'subtasks')
+        if not os.path.isdir(path):
+            os.makedirs(path)
+
+        subtasks = []
+        for s in self.client.tasks.subtasks(self.task['gid']):
+            subtasks.append(s)
+
+        # yield
+        time.sleep(0)
+        for t in subtasks:
+            task_path = os.path.join(path, t['gid'])
+            if os.path.exists(task_path):
+                continue
+
+            if not os.path.isdir(task_path):
+                os.makedirs(task_path)
+
+        with open(os.path.join(self.root_path, 'subtasks.json'),
+                  'w') as fd:
+            fd.write(json.dumps(subtasks))
+
+        LOG.info("saved {} subtasks".format(len(subtasks)))
+        return subtasks
+
+
 class AsanaProjectTaskStories(AsanaResourceBase):
 
     def __init__(self, client, project, projects_dir, task):
@@ -280,12 +336,23 @@ class AsanaProjectTaskStories(AsanaResourceBase):
 
 class AsanaProjectTaskAttachments(AsanaResourceBase):
 
-    def __init__(self, client, project, projects_dir, task):
+    def __init__(self, client, project, projects_dir, task, subtask=None):
         self.client = client
         self.project = project
-        self.task = task
+        self._task = task
+        self._subtask = subtask
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
+        if subtask:
+            self.root_path = os.path.join(self.root_path, 'subtasks',
+                                          subtask['gid'])
+
+    @property
+    def task(self):
+        if self._subtask:
+            return self._subtask
+
+        return self._task
 
     @property
     def _local_store(self):
@@ -305,9 +372,13 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         attachments = []
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
+        t_type = ""
+        if self._subtask:
+            t_type = "sub"
+
         if os.path.exists(self._local_store):
-            LOG.info("fetching attachments for task '{}' (project={}) from "
-                     "cache".format(t_name, p_gid))
+            LOG.info("fetching attachments for {}task '{}' (project={}) from "
+                     "cache".format(t_type, t_name, p_gid))
             with open(self._local_store) as fd:
                 attachments = json.loads(fd.read())
 
@@ -316,8 +387,12 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
     def _from_api(self):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
-        LOG.info("fetching attachments for task='{}' (project gid={}) from "
-                 "api".format(t_name, p_gid))
+        t_type = ""
+        if self._subtask:
+            t_type = "sub"
+
+        LOG.info("fetching attachments for {}task='{}' (project gid={}) from "
+                 "api".format(t_type, t_name, p_gid))
         path = os.path.join(self.root_path, 'attachments')
         if not os.path.isdir(path):
             os.makedirs(path)
@@ -475,6 +550,17 @@ class AsanaExtractor(object):
         return AsanaProjectTasks(self.client, project,
                                  self.projects_dir).get(update_from_api)
 
+    def get_task_subtasks(self, project, task, event, update_from_api=True):
+        """
+        @param update_from_api: allow fetching from the API.
+        """
+        event.clear()
+        tasks = AsanaTaskSubTasks(self.client, project, self.projects_dir,
+                                  task).get(update_from_api)
+        # notify any waiting threads that subtasks are now available.
+        event.set()
+        return tasks
+
     def get_task_stories(self, project, task, update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
@@ -489,6 +575,31 @@ class AsanaExtractor(object):
         return AsanaProjectTaskAttachments(self.client, project,
                                            self.projects_dir,
                                            task).get(update_from_api)
+
+    def get_subtask_attachments(self, project, task, event,
+                                update_from_api=True):
+        """
+        @param update_from_api: allow fetching from the API.
+        """
+        while not event.is_set():
+            time.sleep(1)
+
+        st_obj = AsanaTaskSubTasks(self.client, project, self.projects_dir,
+                                   task)
+        subtasks = st_obj.get()
+        if not subtasks:
+            LOG.debug("no subtasks to fetch attachments for")
+            return
+
+        attachments = []
+        LOG.debug("fetching attachments for {} subtasks".format(len(subtasks)))
+        for subtask in subtasks:
+            attachments.extend(AsanaProjectTaskAttachments(
+                                         self.client, project,
+                                         self.projects_dir,
+                                         task, subtask).get(update_from_api))
+
+        return attachments
 
     def run(self):
         LOG.info("starting extraction to {}".format(self.export_path_team))
@@ -505,8 +616,20 @@ class AsanaExtractor(object):
                                           args=[p, t])
                 thread.start()
                 threads.append(thread)
+
+                event = threading.Event()
+                thread = threading.Thread(target=self.get_task_subtasks,
+                                          args=[p, t, event])
+                thread.start()
+                threads.append(thread)
+
                 thread = threading.Thread(target=self.get_task_attachments,
                                           args=[p, t])
+                thread.start()
+                threads.append(thread)
+
+                thread = threading.Thread(target=self.get_subtask_attachments,
+                                          args=[p, t, event])
                 thread.start()
                 threads.append(thread)
 
@@ -569,19 +692,25 @@ def main():
         teams = ae.get_teams()
         if teams:
             print("\nTeams:")
-            print('\n'.join([t['name'] for t in teams]))
+            print('\n'.join(["{}: {}".
+                             format(t['gid'], t['name'])
+                             for t in teams]))
     elif args.list_projects:
         projects = ae.get_projects(update_from_api=False)
         if projects:
             print("\nProjects:")
-            print('\n'.join([p['name'] for p in projects]))
+            print('\n'.join(["{}: {}".
+                             format(p['gid'], p['name'])
+                             for p in projects]))
     elif args.list_project_tasks:
         for p in ae.get_projects(update_from_api=False):
             if p['name'] == args.list_project_tasks:
                 tasks = ae.get_project_tasks(p, update_from_api=False)
                 if tasks:
                     print("\nTasks:")
-                    print('\n'.join([t['name'] for t in tasks]))
+                    print('\n'.join(["{}: {}".
+                                     format(t['gid'], t['name'])
+                                     for t in tasks]))
 
                 break
     else:
