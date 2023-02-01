@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import abc
 import argparse
+import collections
 import os
+import queue
 import re
 import time
 import threading
@@ -44,8 +46,12 @@ def required(opts):
 
 class Logger(object):
 
+    def __init__(self):
+        self._debug = False
+
     def debug(self, msg):
-        print("DEBUG: {}".format(msg))
+        if self._debug:
+            print("DEBUG: {}".format(msg))
 
     def info(self, msg):
         print("INFO: {}".format(msg))
@@ -55,6 +61,12 @@ class Logger(object):
 
     def error(self, msg):
         print("ERROR: {}".format(msg))
+
+    def set_level(self, level):
+        if level == 'debug':
+            self._debug = True
+        else:
+            self._debug = False
 
 
 LOG = Logger()
@@ -68,6 +80,10 @@ class AsanaResourceBase(abc.ABC):
         Path to local store of information. If this exists it suggests we have
         done at least one api request for this resources.
         """
+
+    @abc.abstractproperty
+    def stats(self):
+        """ Return ExtractorStats object. """
 
     @abc.abstractmethod
     def _from_api(self):
@@ -94,6 +110,28 @@ class AsanaResourceBase(abc.ABC):
         return objs
 
 
+class ExtractorStats(collections.UserDict):
+    def __init__(self):
+        self.data = {}
+
+    def combine(self, stats):
+        for key, value in stats.items():
+            if key in self.data:
+                if type(value) == dict:
+                    self.data[key].update(value)
+                else:
+                    self.data[key] += value
+            else:
+                self.data[key] = value
+
+    def __repr__(self):
+        msg = []
+        for key, value in self.items():
+            msg.append("{}={}".format(key, value))
+
+        return ', '.join(msg)
+
+
 class AsanaProjects(AsanaResourceBase):
 
     def __init__(self, client, workspace, team,
@@ -105,6 +143,11 @@ class AsanaProjects(AsanaResourceBase):
         self.project_exclude_filter = project_exclude_filter
         self.projects_json = projects_json
         self.team = team
+        self._stats = ExtractorStats()
+
+    @property
+    def stats(self):
+        return self._stats
 
     @property
     def _local_store(self):
@@ -112,15 +155,16 @@ class AsanaProjects(AsanaResourceBase):
 
     def _from_local(self):
         projects = []
-        LOG.info("fetching projects for team '{}' from cache".
-                 format(self.team['name']))
+        LOG.debug("fetching projects for team '{}' from cache".
+                  format(self.team['name']))
         if not os.path.exists(self._local_store):
-            LOG.info("no cached projects to list")
+            LOG.debug("no cached projects to list")
             return projects
 
         with open(self._local_store) as fd:
             projects = json.loads(fd.read())
 
+        self.stats['num_projects'] = len(projects)
         return projects
 
     def _from_api(self):
@@ -150,10 +194,11 @@ class AsanaProjects(AsanaResourceBase):
         if ignored:
             LOG.info("ignoring projects:\n  {}".
                      format('\n  '.join(ignored)))
+            self.stats['num_projects_ignored'] = len(ignored)
 
-        LOG.info("saving {}/{} projects".format(len(projects), total))
+        LOG.debug("saving {}/{} projects".format(len(projects), total))
         if projects:
-            LOG.info("updating project cache")
+            LOG.debug("updating project cache")
             """
             if os.path.exists(self.projects_json):
                 with open(self.projects_json) as fd:
@@ -167,8 +212,7 @@ class AsanaProjects(AsanaResourceBase):
             with open(self.projects_json, 'w') as fd:
                 fd.write(json.dumps(projects))
 
-        LOG.info("fetched {} projects for team '{}'".
-                 format(len(projects), self.team['name']))
+        self.stats['num_projects'] = len(projects)
         return projects
 
 
@@ -178,6 +222,11 @@ class AsanaProjectTasks(AsanaResourceBase):
         self.client = client
         self.project = project
         self.root_path = os.path.join(projects_dir, project['gid'])
+        self._stats = ExtractorStats()
+
+    @property
+    def stats(self):
+        return self._stats
 
     @property
     def _local_store(self):
@@ -188,12 +237,13 @@ class AsanaProjectTasks(AsanaResourceBase):
         if not os.path.exists(self._local_store):
             return tasks
 
-        LOG.info("fetching tasks for project '{}' (gid={}) from cache".
-                 format(self.project['name'], self.project['gid']))
+        LOG.debug("fetching tasks for project '{}' (gid={}) from cache".
+                  format(self.project['name'], self.project['gid']))
         with open(self._local_store) as fd:
             tasks = json.loads(fd.read())
 
-        LOG.info("fetched {} tasks".format(len(tasks)))
+        LOG.debug("fetched {} tasks".format(len(tasks)))
+        self.stats['num_tasks'] = len(tasks)
         return tasks
 
     def _from_api(self):
@@ -221,8 +271,7 @@ class AsanaProjectTasks(AsanaResourceBase):
         with open(os.path.join(self.root_path, 'tasks.json'), 'w') as fd:
             fd.write(json.dumps(tasks))
 
-        LOG.info("saved {} tasks".format(len(tasks)))
-        LOG.info("fetched {} tasks".format(len(tasks)))
+        self.stats['num_tasks'] = len(tasks)
         return tasks
 
 
@@ -234,6 +283,11 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         self.task = task
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
+        self._stats = ExtractorStats()
+
+    @property
+    def stats(self):
+        return self._stats
 
     @property
     def _local_store(self):
@@ -244,11 +298,12 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
         if os.path.exists(self._local_store):
-            LOG.info("fetching subtasks for task '{}' (project={}) from cache".
-                     format(t_name, p_gid))
+            LOG.debug("fetching subtasks for task '{}' (project={}) from "
+                      "cache".format(t_name, p_gid))
             with open(os.path.join(self.root_path, 'subtasks.json')) as fd:
                 subtasks = json.loads(fd.read())
 
+        self.stats['num_subtasks'] = len(subtasks)
         return subtasks
 
     def _from_api(self):
@@ -278,7 +333,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
                   'w') as fd:
             fd.write(json.dumps(subtasks))
 
-        LOG.info("saved {} subtasks".format(len(subtasks)))
+        self.stats['num_subtasks'] = len(subtasks)
         return subtasks
 
 
@@ -290,6 +345,11 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         self.task = task
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
+        self._stats = ExtractorStats()
+
+    @property
+    def stats(self):
+        return self._stats
 
     @property
     def _local_store(self):
@@ -300,11 +360,12 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
         if os.path.exists(self._local_store):
-            LOG.info("fetching stories for task '{}' (project={}) from cache".
-                     format(t_name, p_gid))
+            LOG.debug("fetching stories for task '{}' (project={}) from cache".
+                      format(t_name, p_gid))
             with open(os.path.join(self.root_path, 'stories.json')) as fd:
                 stories = json.loads(fd.read())
 
+        self.stats['num_stories'] = len(stories)
         return stories
 
     def _from_api(self):
@@ -330,7 +391,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
                   'w') as fd:
             fd.write(json.dumps(stories))
 
-        LOG.info("saved {} stories".format(len(stories)))
+        self.stats['num_stories'] = len(stories)
         return stories
 
 
@@ -346,6 +407,11 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         if subtask:
             self.root_path = os.path.join(self.root_path, 'subtasks',
                                           subtask['gid'])
+        self._stats = ExtractorStats()
+
+    @property
+    def stats(self):
+        return self._stats
 
     @property
     def task(self):
@@ -359,7 +425,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         return os.path.join(self.root_path, 'attachments.json')
 
     def _download(self, url, path):
-        LOG.info("downloading {} to {}".format(url, path))
+        LOG.debug("downloading {} to {}".format(url, path))
         rq = urllib.request.Request(url=url)
         with urllib.request.urlopen(rq) as url_fd:
             with open(path, 'wb') as fd:
@@ -377,11 +443,12 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
             t_type = "sub"
 
         if os.path.exists(self._local_store):
-            LOG.info("fetching attachments for {}task '{}' (project={}) from "
-                     "cache".format(t_type, t_name, p_gid))
+            LOG.debug("fetching attachments for {}task '{}' (project={}) from "
+                      "cache".format(t_type, t_name, p_gid))
             with open(self._local_store) as fd:
                 attachments = json.loads(fd.read())
 
+        self.stats['num_attachments'] = len(attachments)
         return attachments
 
     def _from_api(self):
@@ -419,7 +486,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
                   'w') as fd:
             fd.write(json.dumps(attachments))
 
-        LOG.info("saved {} attachments".format(len(attachments)))
+        self.stats['num_attachments'] = len(attachments)
         return attachments
 
 
@@ -460,13 +527,14 @@ class AsanaExtractor(object):
         return os.path.join(self.export_path, 'teams.json')
 
     def get_teams(self):
+        stats = ExtractorStats()
         teams = []
         if os.path.exists(self.teams_json):
-            LOG.info("using cached teams")
+            LOG.debug("using cached teams")
             with open(self.teams_json) as fd:
                 teams = json.loads(fd.read())
         else:
-            LOG.info("fetching teams from api")
+            LOG.debug("fetching teams from api")
             teams = []
             for p in self.client.teams.find_by_organization(self.workspace):
                 teams.append(p)
@@ -474,16 +542,17 @@ class AsanaExtractor(object):
             with open(self.teams_json, 'w') as fd:
                 fd.write(json.dumps(teams))
 
-            LOG.info("saved {} teams".format(len(teams)))
+            LOG.debug("saved {} teams".format(len(teams)))
 
-        LOG.info("fetched {} teams".format(len(teams)))
-        return teams
+        stats['num_teams'] = len(teams)
+        return teams, stats
 
     @cached_property
     @required({'token': '--token', '_workspace': '--workspace',
                'teamname': '--team'})
     def team(self):
-        for t in self.get_teams():
+        teams, _ = self.get_teams()
+        for t in teams:
             if t['name'] == self.teamname:
                 return t
 
@@ -510,16 +579,17 @@ class AsanaExtractor(object):
         Since the api can be slow, it is recommended to use the available
         project filters.
         """
-        return AsanaProjects(self.client, self.workspace, self.team,
-                             self.project_include_filter,
-                             self.project_exclude_filter,
-                             self.projects_json).get(update_from_api,
-                                                     prefer_cache=False)
+        ap = AsanaProjects(self.client, self.workspace, self.team,
+                           self.project_include_filter,
+                           self.project_exclude_filter,
+                           self.projects_json)
+        projects = ap.get(update_from_api, prefer_cache=False)
+        return projects, ap.stats
 
     def get_project_templates(self):
         root_path = path = os.path.join(self.projects_dir)
         if os.path.exists(os.path.join(root_path, 'templates.json')):
-            LOG.info("using cached project templates")
+            LOG.debug("using cached project templates")
             with open(os.path.join(root_path, 'templates.json')) as fd:
                 templates = json.loads(fd.read())
         else:
@@ -540,43 +610,50 @@ class AsanaExtractor(object):
             with open(os.path.join(root_path, 'templates.json'), 'w') as fd:
                 fd.write(json.dumps(templates))
 
-        LOG.info("fetched {} templates".format(len(templates)))
-        return templates
+        return templates, {}
 
     def get_project_tasks(self, project, update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
         """
-        return AsanaProjectTasks(self.client, project,
-                                 self.projects_dir).get(update_from_api)
+        apt = AsanaProjectTasks(self.client, project, self.projects_dir)
+        tasks = apt.get(update_from_api)
+        return tasks, apt.stats
 
-    def get_task_subtasks(self, project, task, event, update_from_api=True):
+    def get_task_subtasks(self, project, task, event, stats_queue,
+                          update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
         """
         event.clear()
-        tasks = AsanaTaskSubTasks(self.client, project, self.projects_dir,
-                                  task).get(update_from_api)
+        atst = AsanaTaskSubTasks(self.client, project, self.projects_dir,
+                                 task)
+        atst.get(update_from_api)
         # notify any waiting threads that subtasks are now available.
         event.set()
-        return tasks
+        stats_queue.put(atst.stats)
 
-    def get_task_stories(self, project, task, update_from_api=True):
+    def get_task_stories(self, project, task, stats_queue,
+                         update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
         """
-        return AsanaProjectTaskStories(self.client, project, self.projects_dir,
-                                       task).get(update_from_api)
+        ats = AsanaProjectTaskStories(self.client, project, self.projects_dir,
+                                      task)
+        ats.get(update_from_api)
+        stats_queue.put(ats.stats)
 
-    def get_task_attachments(self, project, task, update_from_api=True):
+    def get_task_attachments(self, project, task, stats_queue,
+                             update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
         """
-        return AsanaProjectTaskAttachments(self.client, project,
-                                           self.projects_dir,
-                                           task).get(update_from_api)
+        ata = AsanaProjectTaskAttachments(self.client, project,
+                                          self.projects_dir, task)
+        ata.get(update_from_api)
+        stats_queue.put(ata.stats)
 
-    def get_subtask_attachments(self, project, task, event,
+    def get_subtask_attachments(self, project, task, event, stats_queue,
                                 update_from_api=True):
         """
         @param update_from_api: allow fetching from the API.
@@ -587,6 +664,8 @@ class AsanaExtractor(object):
         st_obj = AsanaTaskSubTasks(self.client, project, self.projects_dir,
                                    task)
         subtasks = st_obj.get()
+        stats = st_obj.stats
+        stats['num_subtask_attachments'] = 0
         if not subtasks:
             LOG.debug("no subtasks to fetch attachments for")
             return
@@ -594,15 +673,17 @@ class AsanaExtractor(object):
         attachments = []
         LOG.debug("fetching attachments for {} subtasks".format(len(subtasks)))
         for subtask in subtasks:
-            attachments.extend(AsanaProjectTaskAttachments(
-                                         self.client, project,
-                                         self.projects_dir,
-                                         task, subtask).get(update_from_api))
+            asta = AsanaProjectTaskAttachments(self.client, project,
+                                               self.projects_dir, task,
+                                               subtask)
+            attachments.extend(asta.get(update_from_api))
+            stats['num_subtask_attachments'] += asta.stats['num_attachments']
 
-        return attachments
+        stats_queue.put(stats)
 
     def run(self):
-        LOG.info("starting extraction to {}".format(self.export_path_team))
+        LOG.info("=" * 80)
+        LOG.info("starting extraction to {}".format(self.export_path))
         start = time.time()
 
         if not os.path.isdir(self.export_path_team):
@@ -610,39 +691,52 @@ class AsanaExtractor(object):
 
         self.get_project_templates()
         threads = []
-        for p in self.get_projects():
-            for t in self.get_project_tasks(p):
+        projects, stats = self.get_projects()
+        stats_queue = queue.Queue()
+        for p in projects:
+            LOG.info("extracting project {}".format(p['name']))
+            tasks, task_stats = self.get_project_tasks(p)
+            stats.combine(task_stats)
+            for t in tasks:
                 thread = threading.Thread(target=self.get_task_stories,
-                                          args=[p, t])
+                                          args=[p, t, stats_queue])
                 thread.start()
                 threads.append(thread)
 
                 event = threading.Event()
                 thread = threading.Thread(target=self.get_task_subtasks,
-                                          args=[p, t, event])
+                                          args=[p, t, event, stats_queue])
                 thread.start()
                 threads.append(thread)
 
                 thread = threading.Thread(target=self.get_task_attachments,
-                                          args=[p, t])
+                                          args=[p, t, stats_queue])
                 thread.start()
                 threads.append(thread)
 
                 thread = threading.Thread(target=self.get_subtask_attachments,
-                                          args=[p, t, event])
+                                          args=[p, t, event, stats_queue])
                 thread.start()
                 threads.append(thread)
 
         for t in threads:
             t.join()
 
+        LOG.info("project extraction complete.")
+        while not stats_queue.empty():
+            _stats = stats_queue.get()
+            stats.combine(_stats)
+
+        LOG.info("stats: {}".format(stats))
         end = time.time()
-        LOG.info("extraction completed in {} secs.".
-                 format(round(end - start, 3)))
+        LOG.info("extraction to {} completed in {} secs.".
+                 format(self.export_path, round(end - start, 3)))
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help=("enable debug logging"))
     parser.add_argument('--token', type=str,
                         default=None, help="Asana api token")
     parser.add_argument('--workspace', type=str,
@@ -684,6 +778,9 @@ def main():
                               "api calls."))
 
     args = parser.parse_args()
+    if args.debug:
+        LOG.set_level('debug')
+
     ae = AsanaExtractor(token=args.token, workspace=args.workspace,
                         teamname=args.team, export_path=args.export_path,
                         project_include_filter=args.project_filter,
