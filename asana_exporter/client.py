@@ -787,31 +787,39 @@ def main():
                         project_include_filter=args.project_filter,
                         project_exclude_filter=args.exclude_projects)
     if args.list_teams:
-        teams, _ = ae.get_teams()
+        teams, stats = ae.get_teams()
+        LOG.debug("stats: {}".format(stats))
         if teams:
             print("\nTeams:")
-            print('\n'.join(["{}: {}".
+            print('\n'.join(["{}: '{}'".
                              format(t['gid'], t['name'])
                              for t in teams]))
     elif args.list_projects:
-        projects, _ = ae.get_projects(update_from_api=False)
+        projects, stats = ae.get_projects(update_from_api=False)
+        LOG.debug("stats: {}".format(stats))
         if projects:
             print("\nProjects:")
-            print('\n'.join(["{}: {}".
+            print('\n'.join(["{}: '{}'".
                              format(p['gid'], p['name'])
                              for p in projects]))
     elif args.list_project_tasks:
-        projects, _ = ae.get_projects(update_from_api=False)
+        projects, stats = ae.get_projects(update_from_api=False)
+        LOG.debug("stats: {}".format(stats))
         for p in projects:
             if p['name'] == args.list_project_tasks:
                 tasks, _ = ae.get_project_tasks(p, update_from_api=False)
                 if tasks:
                     print("\nTasks:")
-                    print('\n'.join(["{}: {}".
+                    print('\n'.join(["{}: '{}'".
                                      format(t['gid'], t['name'])
                                      for t in tasks]))
 
                 break
+        else:
+            pnames = ["'{}'".format(p['name']) for p in projects]
+            LOG.debug("project name '{}' does not match any of the following:"
+                      "\n{}".format(args.list_project_tasks,
+                                    '\n'.join(pnames)))
     else:
         ae.run()
 
