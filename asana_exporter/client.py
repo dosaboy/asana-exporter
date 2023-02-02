@@ -15,61 +15,8 @@ import urllib.request
 
 from functools import cached_property
 
-LOCK = threading.Lock()
-
-
-def with_lock(f):
-    def with_lock_inner(*args, **kwargs):
-        with LOCK:
-            return f(*args, **kwargs)
-
-    return with_lock_inner
-
-
-def required(opts):
-    """
-    @param opts: dict where key is attr name and val is opt name.
-    """
-    def _required(f):
-        def _inner_required(self, *args, **kwargs):
-            has = all([hasattr(self, o) for o in opts])
-            if not has or not all([getattr(self, o) for o in opts]):
-                msg = ("one or more of the following required options have "
-                       "not been provided: {}".
-                       format(', '.join(opts.values())))
-                raise Exception(msg)
-            return f(self, *args, **kwargs)
-
-        return _inner_required
-    return _required
-
-
-class Logger(object):
-
-    def __init__(self):
-        self._debug = False
-
-    def debug(self, msg):
-        if self._debug:
-            print("DEBUG: {}".format(msg))
-
-    def info(self, msg):
-        print("INFO: {}".format(msg))
-
-    def warning(self, msg):
-        print("WARNING: {}".format(msg))
-
-    def error(self, msg):
-        print("ERROR: {}".format(msg))
-
-    def set_level(self, level):
-        if level == 'debug':
-            self._debug = True
-        else:
-            self._debug = False
-
-
-LOG = Logger()
+from asana_exporter import utils
+from asana_exporter.utils import LOG
 
 
 class AsanaResourceBase(abc.ABC):
@@ -93,7 +40,7 @@ class AsanaResourceBase(abc.ABC):
     def _from_local(self):
         """ Fetch resources from the local cache/export. """
 
-    @with_lock
+    @utils.with_lock
     def get(self, update_from_api=True, prefer_cache=True):
         if prefer_cache:
             objs = self._from_local()
@@ -505,12 +452,12 @@ class AsanaExtractor(object):
             os.makedirs(self.export_path)
 
     @cached_property
-    @required({'token': '--token'})
+    @utils.required({'token': '--token'})
     def client(self):
         return asana.Client.access_token(self.token)
 
     @cached_property
-    @required({'_workspace': '--workspace'})
+    @utils.required({'_workspace': '--workspace'})
     def workspace(self):
         """
         If workspace name is provided we need to lookup its GID.
@@ -549,8 +496,8 @@ class AsanaExtractor(object):
         return teams, stats
 
     @cached_property
-    @required({'token': '--token', '_workspace': '--workspace',
-               'teamname': '--team'})
+    @utils.required({'token': '--token', '_workspace': '--workspace',
+                     'teamname': '--team'})
     def team(self):
         teams, _ = self.get_teams()
         for t in teams:
@@ -571,7 +518,7 @@ class AsanaExtractor(object):
     def projects_dir(self):
         return os.path.join(self.export_path_team, 'projects')
 
-    @required({'teamname': '--team'})
+    @utils.required({'teamname': '--team'})
     def get_projects(self, update_from_api=True):
         """
         Fetch projects owned by a give team. By default this will get projects
