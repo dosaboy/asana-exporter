@@ -510,6 +510,7 @@ class AsanaExtractor(object):
         return asana.Client.access_token(self.token)
 
     @cached_property
+    @required({'_workspace': '--workspace'})
     def workspace(self):
         """
         If workspace name is provided we need to lookup its GID.
@@ -786,23 +787,24 @@ def main():
                         project_include_filter=args.project_filter,
                         project_exclude_filter=args.exclude_projects)
     if args.list_teams:
-        teams = ae.get_teams()
+        teams, _ = ae.get_teams()
         if teams:
             print("\nTeams:")
             print('\n'.join(["{}: {}".
                              format(t['gid'], t['name'])
                              for t in teams]))
     elif args.list_projects:
-        projects = ae.get_projects(update_from_api=False)
+        projects, _ = ae.get_projects(update_from_api=False)
         if projects:
             print("\nProjects:")
             print('\n'.join(["{}: {}".
                              format(p['gid'], p['name'])
                              for p in projects]))
     elif args.list_project_tasks:
-        for p in ae.get_projects(update_from_api=False):
+        projects, _ = ae.get_projects(update_from_api=False)
+        for p in projects:
             if p['name'] == args.list_project_tasks:
-                tasks = ae.get_project_tasks(p, update_from_api=False)
+                tasks, _ = ae.get_project_tasks(p, update_from_api=False)
                 if tasks:
                     print("\nTasks:")
                     print('\n'.join(["{}: {}".
