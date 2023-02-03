@@ -8,7 +8,7 @@ import re
 from jira import JIRA
 from functools import cached_property
 
-from asana_exporter.utils import LOG
+from asana_exporter.utils import LOG, with_lock
 
 
 class JiraImporter(object):
@@ -28,10 +28,7 @@ class JiraImporter(object):
         self.project = self.jira.project(target_project)
 
     @cached_property
-    def components(self):
-        return [c.name for c in self.project.components]
-
-    @cached_property
+    @with_lock
     def asana_team_id(self):
         teams_path = os.path.join(self.source, 'teams.json')
         with open(teams_path) as fd:
@@ -40,6 +37,7 @@ class JiraImporter(object):
                     return t['gid']
 
     @cached_property
+    @with_lock
     def asana_projects(self):
         projects_path = os.path.join(self.source, 'teams', self.asana_team_id,
                                      'projects.json')
