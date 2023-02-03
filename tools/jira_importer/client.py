@@ -263,6 +263,9 @@ class JiraImporter(object):
             LOG.warning("path not found {}".format(self.source))
             return
 
+        LOG.info("pre-loading issues")
+        self.project_issues
+
         LOG.info("importing data from {}".format(self.source))
         jobs = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
