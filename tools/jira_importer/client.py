@@ -186,8 +186,8 @@ class JiraImporter(object):
                     LOG.debug("subtask for asana subtask '{}' already exists "
                               "- skipping create".format(ast['name']))
                 else:
-                    print("creating subtask from asana task subtask '{}'".
-                          format(ast['name']))
+                    LOG.debug("creating subtask from asana task subtask '{}'".
+                              format(ast['name']))
                     subtask = self.jira.create_issue(
                                                 project=self.project.key,
                                                 description=desc,
