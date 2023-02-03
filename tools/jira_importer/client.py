@@ -77,8 +77,14 @@ class JiraImporter(object):
             attachments = json.loads(fd.read())
 
         for a in attachments:
-            dl_path = os.path.join(ppath, 'tasks', at['gid'], 'attachments',
-                                   "{}_download".format(a['gid']))
+            if ast:
+                dl_path = os.path.join(ppath, 'tasks', at['gid'], 'subtasks',
+                                       ast['gid'], 'attachments',
+                                       "{}_download".format(a['gid']))
+            else:
+                dl_path = os.path.join(ppath, 'tasks', at['gid'],
+                                       'attachments',
+                                       "{}_download".format(a['gid']))
             a['local_path'] = dl_path
 
         return attachments
@@ -98,23 +104,28 @@ class JiraImporter(object):
                           format(story['gid']))
                 continue
 
-            LOG.debug("adding comment to subtask: '{}...'".
-                      format(story['text'][:20]))
+            LOG.info("adding comment to subtask: '{}...'".
+                     format(story['text'][:20]))
             self.jira.add_comment(subtask, story['text'])
 
     def add_attachments_to_subtask(self, subtask, ppath, at, ast=None):
         attachments = self.asana_task_attachments(ppath, at, ast)
         task = ast or at
+        ttype = ''
+        if ast:
+            ttype = "sub"
+
         if not attachments:
-            LOG.debug("asana task '{}' has no attachments".
-                      format(task['name']))
-        else:
-            LOG.debug("asana task '{}' has '{}' attachments".
-                      format(task['name'], len(attachments)))
+            LOG.debug("asana {}task '{}' has no attachments".
+                      format(ttype, task['name']))
+            return
+
+        LOG.debug("asana {}task '{}' has '{}' attachments".
+                  format(ttype, task['name'], len(attachments)))
 
         for attachment in attachments:
-            LOG.debug("adding attachments to subtask: {}".
-                      format(attachment['name'][:10]))
+            LOG.info("adding attachment '{}' to subtask".
+                     format(attachment['name']))
             with open(attachment['local_path'], 'rb') as fd:
                 LOG.debug("attaching name={} file={}".
                           format(attachment['name'], fd.name))
@@ -123,8 +134,8 @@ class JiraImporter(object):
     def import_asana_subtasks(self, jira_task, ppath, at, existing_subtasks,
                               desc):
         asana_subtasks = self.asana_project_task_subtasks(ppath, at)
-        LOG.debug("importing {} asana subtasks as subtasks".
-                  format(len(asana_subtasks)))
+        LOG.info("importing {} asana subtasks as subtasks".
+                 format(len(asana_subtasks)))
         for ast in self.asana_project_task_subtasks(ppath, at):
             _st_name = ">> {}".format(ast['name'])
             subtask = None
@@ -138,8 +149,8 @@ class JiraImporter(object):
                           "- skipping create".format(ast['name']))
                 continue
 
-            LOG.debug("creating subtask from asana task subtask '{}'".
-                      format(ast['name']))
+            LOG.info("creating subtask from asana task subtask '{}'".
+                     format(ast['name']))
             subtask = self.jira.create_issue(
                                         project=self.project.key,
                                         description=desc,
@@ -157,8 +168,8 @@ class JiraImporter(object):
 
     def import_asana_project(self, pname, ppath):
         asana_tasks = self.asana_project_tasks(ppath)
-        LOG.debug("importing asana project '{}' with {} tasks".
-                  format(pname, len(asana_tasks)))
+        LOG.info("importing asana project '{}' with {} tasks".
+                 format(pname, len(asana_tasks)))
 
         task = None
         for _task in self.project_issues:
@@ -170,12 +181,11 @@ class JiraImporter(object):
                 format(self.asana_team, pname))
 
         if task is None:
-            LOG.debug("creating task '{}'".format(pname))
+            LOG.info("creating task '{}'".format(pname))
             task = self.jira.create_issue(project=self.project.key,
                                           summary=pname,
                                           description=desc,
                                           issuetype={'name': 'Task'})
-            self.jira.transition_issue(task, 'DONE')
         else:
             LOG.debug("task '{}' already exists - skipping create".
                       format(pname))
@@ -195,7 +205,7 @@ class JiraImporter(object):
                     break
 
             if not subtask:
-                LOG.debug("creating subtask '{}'". format(at['name']))
+                LOG.info("creating subtask '{}'". format(at['name']))
                 subtask = self.jira.create_issue(
                                             project=self.project.key,
                                             description=desc,
@@ -215,6 +225,10 @@ class JiraImporter(object):
 
             self.import_asana_subtasks(task, ppath, at, existing_subtasks,
                                        desc)
+
+        # Leave this till the end since tasks cant be deleted when in the DONE
+        # state.
+        self.jira.transition_issue(task, 'DONE')
 
     @cached_property
     def project_issues(self):
