@@ -123,7 +123,7 @@ class JiraImporter(object):
     def import_asana_subtasks(self, jira_task, ppath, at, existing_subtasks,
                               desc):
         asana_subtasks = self.asana_project_task_subtasks(ppath, at)
-        LOG.debug("adding {} asana subtasks as subtasks".
+        LOG.debug("importing {} asana subtasks as subtasks".
                   format(len(asana_subtasks)))
         for ast in self.asana_project_task_subtasks(ppath, at):
             _st_name = ">> {}".format(ast['name'])
