@@ -22,10 +22,19 @@ class JiraImporter(object):
         self.asana_project = asana_project
         self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
-        self.jira = JIRA(server="https://warthogs.atlassian.net",
-                         basic_auth=(auth_email,
-                                     auth_token))
-        self.project = self.jira.project(target_project)
+        self._jira = JIRA(server="https://warthogs.atlassian.net",
+                          basic_auth=(auth_email,
+                                      auth_token))
+
+    @cached_property
+    @with_lock
+    def jira(self):
+        return self._jira
+
+    @cached_property
+    @with_lock
+    def project(self):
+        return self._jira.project(self.target_project)
 
     @property
     def asana_team_id(self):
@@ -158,9 +167,9 @@ class JiraImporter(object):
                                         issuetype={'name': 'Sub-task'},
                                         parent={'key': jira_task.key})
             try:
-                self.jira.transition_issue(subtask, 'DONE')
                 self.add_comments_to_subtask(subtask, ppath, at, ast)
                 self.add_attachments_to_subtask(subtask, ppath, at, ast)
+                self.jira.transition_issue(subtask, 'DONE')
             except Exception:
                 LOG.error("failed to import task '{}' subtask '{}'".
                           format(at['gid'], ast['gid']))
@@ -171,6 +180,7 @@ class JiraImporter(object):
         LOG.info("importing asana project '{}' with {} tasks".
                  format(pname, len(asana_tasks)))
 
+        pname = pname.strip()
         task = None
         for _task in self.project_issues:
             if _task.fields.summary == pname:
@@ -199,29 +209,31 @@ class JiraImporter(object):
                 continue
 
             subtask = None
+            summary = at['name'].strip()
+            summary = summary.replace('\n', ' ')
             for _st in existing_subtasks:
-                if _st.fields.summary == at['name']:
+                if _st.fields.summary == summary:
                     subtask = _st
                     break
 
             if not subtask:
-                LOG.info("creating subtask '{}'". format(at['name']))
+                LOG.info("creating subtask '{}'". format(summary))
                 subtask = self.jira.create_issue(
                                             project=self.project.key,
                                             description=desc,
-                                            summary=at['name'],
+                                            summary=summary,
                                             issuetype={'name': 'Sub-task'},
                                             parent={'key': task.key})
                 try:
-                    self.jira.transition_issue(subtask, 'DONE')
                     self.add_comments_to_subtask(subtask, ppath, at)
                     self.add_attachments_to_subtask(subtask, ppath, at)
+                    self.jira.transition_issue(subtask, 'DONE')
                 except Exception:
                     LOG.error("failed to import task '{}'".format(at['gid']))
                     subtask.delete()
             else:
                 LOG.debug("subtask '{}' already exists - skipping create".
-                          format(at['name']))
+                          format(summary))
 
             self.import_asana_subtasks(task, ppath, at, existing_subtasks,
                                        desc)
@@ -229,18 +241,29 @@ class JiraImporter(object):
         # Leave this till the end since tasks cant be deleted when in the DONE
         # state.
         self.jira.transition_issue(task, 'DONE')
+        LOG.info("project '{}' import complete.".format(pname))
 
     @cached_property
     def project_issues(self):
+        start_at = 0
+        limit = 50
+        issues = []
         query = "project = {} AND issuetype = Task".format(self.target_project)
-        return self.jira.search_issues(jql_str=query)
+        while True:
+            _issues = self.jira.search_issues(jql_str=query, startAt=start_at,
+                                              maxResults=limit)
+            if not _issues:
+                return issues
+
+            start_at += limit
+            issues.extend(_issues)
 
     def import_data(self):
         if not os.path.exists(self.source):
             LOG.warning("path not found {}".format(self.source))
             return
 
-        LOG.debug("importing data from {}".format(self.source))
+        LOG.info("importing data from {}".format(self.source))
         jobs = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             for pname, ppath in self.asana_projects:
@@ -260,7 +283,8 @@ class JiraImporter(object):
 
             for job in concurrent.futures.as_completed(jobs):
                 job.result()
-                LOG.debug("project '{}' import complete.".format(jobs[job]))
+
+        LOG.info("import complete.")
 
 
 def main():
