@@ -214,14 +214,14 @@ class JiraImporter(object):
             for pname, ppath in self.asana_projects:
                 if self.project_include_filter:
                     if not re.search(self.project_include_filter, pname):
-                        LOG.debug("skipping asana project {}".format(pname))
+                        LOG.info("skipping asana project {}".format(pname))
                         continue
 
-                    if self.project_exclude_filter:
-                        if re.search(self.project_exclude_filter, pname):
-                            LOG.debug("skipping asana project {}".
-                                      format(pname))
-                            continue
+                if self.project_exclude_filter:
+                    if re.search(self.project_exclude_filter, pname):
+                        LOG.info("skipping asana project {}".
+                                 format(pname))
+                        continue
 
                 jobs[executor.submit(self.create_jira_task, pname,
                                      ppath)] = pname
