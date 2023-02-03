@@ -96,6 +96,11 @@ class JiraImporter(object):
 
     def add_comments_to_subtask(self, subtask, ppath, at, ast=None):
         for story in self.asana_task_stories(ppath, at, ast):
+            if not story['text']:
+                LOG.debug("skipping comment with empty body (story gid={})".
+                          format(story['gid']))
+                continue
+
             LOG.debug("adding comment to subtask: '{}...'".
                       format(story['text'][:20]))
             self.jira.add_comment(subtask, story['text'])
@@ -118,16 +123,49 @@ class JiraImporter(object):
                           format(attachment['name'], fd.name))
                 self.jira.add_attachment(subtask, fd, attachment['name'])
 
-    def create_jira_task(self, pname, ppath):
+    def import_asana_subtasks(self, jira_task, ppath, at, existing_subtasks,
+                              desc):
+        asana_subtasks = self.asana_project_task_subtasks(ppath, at)
+        LOG.debug("adding {} asana subtasks as subtasks".
+                  format(len(asana_subtasks)))
+        for ast in self.asana_project_task_subtasks(ppath, at):
+            _st_name = ">> {}".format(ast['name'])
+            subtask = None
+            for _st in existing_subtasks:
+                if _st.fields.summary == _st_name:
+                    subtask = _st
+                    break
+
+            if subtask:
+                LOG.debug("subtask for asana subtask '{}' already exists "
+                          "- skipping create".format(ast['name']))
+                continue
+
+            LOG.debug("creating subtask from asana task subtask '{}'".
+                      format(ast['name']))
+            subtask = self.jira.create_issue(
+                                        project=self.project.key,
+                                        description=desc,
+                                        summary=_st_name,
+                                        issuetype={'name': 'Sub-task'},
+                                        parent={'key': jira_task.key})
+            try:
+                self.jira.transition_issue(subtask, 'DONE')
+                self.add_comments_to_subtask(subtask, ppath, at, ast)
+                self.add_attachments_to_subtask(subtask, ppath, at, ast)
+            except Exception:
+                LOG.error("failed to import task '{}' subtask '{}'".
+                          format(at['gid'], ast['gid']))
+                subtask.delete()
+
+    def import_asana_project(self, pname, ppath):
         asana_tasks = self.asana_project_tasks(ppath)
-        LOG.debug("creating jira task '{}' with {} subtasks".
+        LOG.debug("importing asana project '{}' with {} tasks".
                   format(pname, len(asana_tasks)))
 
         task = None
         for _task in self.project_issues:
             if _task.fields.summary == pname:
-                LOG.debug("task '{}' already exists - skipping create".
-                          format(pname))
                 task = _task
                 break
 
@@ -141,8 +179,11 @@ class JiraImporter(object):
                                           description=desc,
                                           issuetype={'name': 'Task'})
             self.jira.transition_issue(task, 'DONE')
+        else:
+            LOG.debug("task '{}' already exists - skipping create".
+                      format(pname))
 
-        LOG.debug("adding {} subtasks to '{}'".format(len(asana_tasks), pname))
+        LOG.debug("importing {} tasks to '{}'".format(len(asana_tasks), pname))
         existing_subtasks = task.fields.subtasks
         for at in asana_tasks:
             if at['name'] == '':
@@ -164,44 +205,24 @@ class JiraImporter(object):
                                             summary=at['name'],
                                             issuetype={'name': 'Sub-task'},
                                             parent={'key': task.key})
-                self.jira.transition_issue(subtask, 'DONE')
-                self.add_comments_to_subtask(subtask, ppath, at)
-                self.add_attachments_to_subtask(subtask, ppath, at)
+                try:
+                    self.jira.transition_issue(subtask, 'DONE')
+                    self.add_comments_to_subtask(subtask, ppath, at)
+                    self.add_attachments_to_subtask(subtask, ppath, at)
+                except Exception:
+                    LOG.error("failed to import task '{}'".format(at['gid']))
+                    subtask.delete()
             else:
                 LOG.debug("subtask '{}' already exists - skipping create".
                           format(at['name']))
 
-            asana_subtasks = self.asana_project_task_subtasks(ppath, at)
-            LOG.debug("adding {} asana subtasks as subtasks".
-                      format(len(asana_subtasks)))
-            for ast in self.asana_project_task_subtasks(ppath, at):
-                _st_name = ">> {}".format(ast['name'])
-                subtask = None
-                for _st in existing_subtasks:
-                    if _st.fields.summary == _st_name:
-                        subtask = _st
-                        break
-
-                if subtask:
-                    LOG.debug("subtask for asana subtask '{}' already exists "
-                              "- skipping create".format(ast['name']))
-                else:
-                    LOG.debug("creating subtask from asana task subtask '{}'".
-                              format(ast['name']))
-                    subtask = self.jira.create_issue(
-                                                project=self.project.key,
-                                                description=desc,
-                                                summary=_st_name,
-                                                issuetype={'name': 'Sub-task'},
-                                                parent={'key': task.key})
-                    self.jira.transition_issue(subtask, 'DONE')
-                    self.add_comments_to_subtask(subtask, ppath, at, ast)
-                    self.add_attachments_to_subtask(subtask, ppath, at, ast)
+            self.import_asana_subtasks(task, ppath, at, existing_subtasks,
+                                       desc)
 
     @cached_property
     def project_issues(self):
-        return self.jira.search_issues(jql_str="project = {}".
-                                       format(self.target_project))
+        query = "project = {} AND issuetype = Task".format(self.target_project)
+        return self.jira.search_issues(jql_str=query)
 
     def import_data(self):
         if not os.path.exists(self.source):
@@ -223,7 +244,7 @@ class JiraImporter(object):
                                  format(pname))
                         continue
 
-                jobs[executor.submit(self.create_jira_task, pname,
+                jobs[executor.submit(self.import_asana_project, pname,
                                      ppath)] = pname
 
             for job in concurrent.futures.as_completed(jobs):
