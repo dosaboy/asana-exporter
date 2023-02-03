@@ -251,7 +251,7 @@ class JiraImporter(object):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--debug', action='store_true', default=True,
+    parser.add_argument('--debug', action='store_true', default=False,
                         help=("enable debug logging"))
     parser.add_argument('--token', type=str,
                         default=None, help="Jira api token")
