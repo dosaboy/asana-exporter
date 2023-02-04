@@ -140,16 +140,22 @@ class JiraImporter(object):
                           format(attachment['name'], fd.name))
                 self.jira.add_attachment(subtask, fd, attachment['name'])
 
+    def sanitise_summary(self, summary):
+        summary = summary.strip()
+        summary = summary.replace('\n', ' ')
+        # jira supports max 255 chars for summary
+        return summary[:255]
+
     def import_asana_subtasks(self, jira_task, ppath, at, existing_subtasks,
                               desc):
         asana_subtasks = self.asana_project_task_subtasks(ppath, at)
         LOG.info("importing {} asana subtasks as subtasks".
                  format(len(asana_subtasks)))
         for ast in self.asana_project_task_subtasks(ppath, at):
-            _st_name = ">> {}".format(ast['name'])
+            summary = self.sanitise_summary(">> {}".format(ast['name']))
             subtask = None
             for _st in existing_subtasks:
-                if _st.fields.summary == _st_name:
+                if _st.fields.summary == summary:
                     subtask = _st
                     break
 
@@ -163,7 +169,7 @@ class JiraImporter(object):
             subtask = self.jira.create_issue(
                                         project=self.project.key,
                                         description=desc,
-                                        summary=_st_name,
+                                        summary=summary,
                                         issuetype={'name': 'Sub-task'},
                                         parent={'key': jira_task.key})
             try:
@@ -175,7 +181,7 @@ class JiraImporter(object):
                           format(at['gid'], ast['gid']))
                 subtask.delete()
 
-    def import_asana_project(self, pname, ppath):
+    def _import_asana_project(self, pname, ppath):
         asana_tasks = self.asana_project_tasks(ppath)
         LOG.info("importing asana project '{}' with {} tasks".
                  format(pname, len(asana_tasks)))
@@ -199,6 +205,13 @@ class JiraImporter(object):
         else:
             LOG.debug("task '{}' already exists - skipping create".
                       format(pname))
+            current_status = str(task.fields.status)
+            if current_status != 'Backlog':
+                LOG.warning("tasks must be in state 'Backlog' if they "
+                            "are to be modified - task '{}' is in state '{}' "
+                            "- ignoring task".
+                            format(task.fields.summary, current_status))
+                return
 
         LOG.debug("importing {} tasks to '{}'".format(len(asana_tasks), pname))
         existing_subtasks = task.fields.subtasks
@@ -209,8 +222,7 @@ class JiraImporter(object):
                 continue
 
             subtask = None
-            summary = at['name'].strip()
-            summary = summary.replace('\n', ' ')
+            summary = self.sanitise_summary(at['name'])
             for _st in existing_subtasks:
                 if _st.fields.summary == summary:
                     subtask = _st
@@ -242,6 +254,14 @@ class JiraImporter(object):
         # state.
         self.jira.transition_issue(task, 'DONE')
         LOG.info("project '{}' import complete.".format(pname))
+
+    def import_asana_project(self, pname, ppath):
+        try:
+            return self._import_asana_project(pname, ppath)
+        except Exception:
+            LOG.error("an exception occurred while importing project '{}' "
+                      "from team '{}'".format(pname, self.asana_team))
+            raise
 
     @cached_property
     def project_issues(self):
