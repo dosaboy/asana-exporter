@@ -33,7 +33,7 @@ class AsanaResourceBase(abc.ABC):
         """ Return ExtractorStats object. """
 
     @abc.abstractmethod
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         """ Fetch resources from the API. """
 
     @abc.abstractmethod
@@ -41,15 +41,14 @@ class AsanaResourceBase(abc.ABC):
         """ Fetch resources from the local cache/export. """
 
     @utils.with_lock
-    def get(self, update_from_api=True, prefer_cache=True):
+    def get(self, update_from_api=True, prefer_cache=True, readonly=False):
         if prefer_cache:
             objs = self._from_local()
         else:
             objs = []
 
-        if not objs and not os.path.exists(self._local_store):
-            if update_from_api:
-                objs = self._from_api()
+        if not objs and update_from_api:
+            objs = self._from_api(readonly=readonly)
 
         if not objs and not prefer_cache:
             objs = self._from_local()
@@ -114,7 +113,7 @@ class AsanaProjects(AsanaResourceBase):
         self.stats['num_projects'] = len(projects)
         return projects
 
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         LOG.info("fetching projects for team '{}' from api".
                  format(self.team['name']))
         total = 0
@@ -136,12 +135,16 @@ class AsanaProjects(AsanaResourceBase):
 
             projects.append(p)
 
-        # yield
-        time.sleep(0)
         if ignored:
             LOG.info("ignoring projects:\n  {}".
                      format('\n  '.join(ignored)))
             self.stats['num_projects_ignored'] = len(ignored)
+
+        if readonly:
+            return projects
+
+        # yield
+        time.sleep(0)
 
         LOG.debug("saving {}/{} projects".format(len(projects), total))
         if projects:
@@ -193,7 +196,7 @@ class AsanaProjectTasks(AsanaResourceBase):
         self.stats['num_tasks'] = len(tasks)
         return tasks
 
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         tasks = []
         LOG.info("fetching tasks for project '{}' (gid={}) from api".
                  format(self.project['name'], self.project['gid']))
@@ -253,7 +256,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         self.stats['num_subtasks'] = len(subtasks)
         return subtasks
 
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
         LOG.info("fetching subtasks for task='{}' (project gid={}) from "
@@ -315,7 +318,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         self.stats['num_stories'] = len(stories)
         return stories
 
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
         LOG.info("fetching stories for task='{}' (project gid={}) from "
@@ -398,7 +401,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         self.stats['num_attachments'] = len(attachments)
         return attachments
 
-    def _from_api(self):
+    def _from_api(self, readonly=False):
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
         t_type = ""
@@ -474,7 +477,7 @@ class AsanaExtractor(object):
     def teams_json(self):
         return os.path.join(self.export_path, 'teams.json')
 
-    def get_teams(self):
+    def get_teams(self, readonly=False):
         stats = ExtractorStats()
         teams = []
         if os.path.exists(self.teams_json):
@@ -487,10 +490,11 @@ class AsanaExtractor(object):
             for p in self.client.teams.find_by_organization(self.workspace):
                 teams.append(p)
 
-            with open(self.teams_json, 'w') as fd:
-                fd.write(json.dumps(teams))
+            if not readonly:
+                with open(self.teams_json, 'w') as fd:
+                    fd.write(json.dumps(teams))
 
-            LOG.debug("saved {} teams".format(len(teams)))
+                LOG.debug("saved {} teams".format(len(teams)))
 
         stats['num_teams'] = len(teams)
         return teams, stats
@@ -519,7 +523,7 @@ class AsanaExtractor(object):
         return os.path.join(self.export_path_team, 'projects')
 
     @utils.required({'teamname': '--team'})
-    def get_projects(self, update_from_api=True):
+    def get_projects(self, *args, **kwargs):
         """
         Fetch projects owned by a give team. By default this will get projects
         from the Asana api and add them to the extraction archive.
@@ -531,7 +535,7 @@ class AsanaExtractor(object):
                            self.project_include_filter,
                            self.project_exclude_filter,
                            self.projects_json)
-        projects = ap.get(update_from_api, prefer_cache=False)
+        projects = ap.get(*args, **kwargs)
         return projects, ap.stats
 
     def get_project_templates(self):
@@ -560,49 +564,49 @@ class AsanaExtractor(object):
 
         return templates, {}
 
-    def get_project_tasks(self, project, update_from_api=True):
+    def get_project_tasks(self, project, *args, **kwargs):
         """
         @param update_from_api: allow fetching from the API.
         """
         apt = AsanaProjectTasks(self.client, project, self.projects_dir)
-        tasks = apt.get(update_from_api)
+        tasks = apt.get(*args, **kwargs)
         return tasks, apt.stats
 
     def get_task_subtasks(self, project, task, event, stats_queue,
-                          update_from_api=True):
+                          *args, **kwargs):
         """
         @param update_from_api: allow fetching from the API.
         """
         event.clear()
         atst = AsanaTaskSubTasks(self.client, project, self.projects_dir,
                                  task)
-        atst.get(update_from_api)
+        atst.get(*args, **kwargs)
         # notify any waiting threads that subtasks are now available.
         event.set()
         stats_queue.put(atst.stats)
 
     def get_task_stories(self, project, task, stats_queue,
-                         update_from_api=True):
+                         *args, **kwargs):
         """
         @param update_from_api: allow fetching from the API.
         """
         ats = AsanaProjectTaskStories(self.client, project, self.projects_dir,
                                       task)
-        ats.get(update_from_api)
+        ats.get(*args, **kwargs)
         stats_queue.put(ats.stats)
 
     def get_task_attachments(self, project, task, stats_queue,
-                             update_from_api=True):
+                             *args, **kwargs):
         """
         @param update_from_api: allow fetching from the API.
         """
         ata = AsanaProjectTaskAttachments(self.client, project,
                                           self.projects_dir, task)
-        ata.get(update_from_api)
+        ata.get(*args, **kwargs)
         stats_queue.put(ata.stats)
 
     def get_subtask_attachments(self, project, task, event, stats_queue,
-                                update_from_api=True):
+                                *args, **kwargs):
         """
         @param update_from_api: allow fetching from the API.
         """
@@ -611,7 +615,7 @@ class AsanaExtractor(object):
 
         st_obj = AsanaTaskSubTasks(self.client, project, self.projects_dir,
                                    task)
-        subtasks = st_obj.get()
+        subtasks = st_obj.get(*args, **kwargs)
         stats = st_obj.stats
         stats['num_subtask_attachments'] = 0
         if not subtasks:
@@ -624,7 +628,7 @@ class AsanaExtractor(object):
             asta = AsanaProjectTaskAttachments(self.client, project,
                                                self.projects_dir, task,
                                                subtask)
-            attachments.extend(asta.get(update_from_api))
+            attachments.extend(asta.get(*args, **kwargs))
             stats['num_subtask_attachments'] += asta.stats['num_attachments']
 
         stats_queue.put(stats)
@@ -639,7 +643,7 @@ class AsanaExtractor(object):
 
         self.get_project_templates()
         threads = []
-        projects, stats = self.get_projects()
+        projects, stats = self.get_projects(prefer_cache=False)
         stats_queue = queue.Queue()
         for p in projects:
             LOG.info("extracting project {}".format(p['name']))
@@ -734,7 +738,7 @@ def main():
                         project_include_filter=args.project_filter,
                         project_exclude_filter=args.exclude_projects)
     if args.list_teams:
-        teams, stats = ae.get_teams()
+        teams, stats = ae.get_teams(readonly=True)
         LOG.debug("stats: {}".format(stats))
         if teams:
             print("\nTeams:")
@@ -742,7 +746,7 @@ def main():
                              format(t['gid'], t['name'])
                              for t in teams]))
     elif args.list_projects:
-        projects, stats = ae.get_projects(update_from_api=False)
+        projects, stats = ae.get_projects(prefer_cache=True, readonly=True)
         LOG.debug("stats: {}".format(stats))
         if projects:
             print("\nProjects:")
@@ -750,11 +754,12 @@ def main():
                              format(p['gid'], p['name'])
                              for p in projects]))
     elif args.list_project_tasks:
-        projects, stats = ae.get_projects(update_from_api=False)
+        projects, stats = ae.get_projects(update_from_api=False, readonly=True)
         LOG.debug("stats: {}".format(stats))
         for p in projects:
             if p['name'] == args.list_project_tasks:
-                tasks, _ = ae.get_project_tasks(p, update_from_api=False)
+                tasks, _ = ae.get_project_tasks(p, update_from_api=False,
+                                                readonly=True)
                 if tasks:
                     print("\nTasks:")
                     print('\n'.join(["{}: '{}'".
@@ -769,6 +774,8 @@ def main():
                                     '\n'.join(pnames)))
     else:
         ae.run()
+
+    LOG.info("done.")
 
 
 if __name__ == "__main__":
