@@ -49,6 +49,11 @@ class JiraImporter(object):
     def asana_projects(self):
         projects_path = os.path.join(self.source, 'teams', self.asana_team_id,
                                      'projects.json')
+        if not os.path.exists(projects_path):
+            LOG.debug("asana team '{}' has no projects to import".
+                      format(self.asana_team))
+            return []
+
         template = os.path.join(self.source, 'teams', self.asana_team_id)
         template += "/projects/{}"
         with open(projects_path) as fd:
