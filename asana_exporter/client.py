@@ -21,6 +21,9 @@ from asana_exporter.utils import LOG
 
 class AsanaResourceBase(abc.ABC):
 
+    def __init__(self, force_update=False):
+        self.force_update = force_update
+
     @abc.abstractproperty
     def _local_store(self):
         """
@@ -42,7 +45,7 @@ class AsanaResourceBase(abc.ABC):
 
     @utils.with_lock
     def get(self, update_from_api=True, prefer_cache=True, readonly=False):
-        if prefer_cache:
+        if prefer_cache and not self.force_update:
             objs = self._from_local()
         else:
             objs = []
@@ -82,7 +85,7 @@ class AsanaProjects(AsanaResourceBase):
 
     def __init__(self, client, workspace, team,
                  project_include_filter, project_exclude_filter,
-                 projects_json):
+                 projects_json, force_update):
         self.client = client
         self.workspace = workspace
         self.project_include_filter = project_include_filter
@@ -90,6 +93,7 @@ class AsanaProjects(AsanaResourceBase):
         self.projects_json = projects_json
         self.team = team
         self._stats = ExtractorStats()
+        super().__init__(force_update)
 
     @property
     def stats(self):
@@ -168,11 +172,12 @@ class AsanaProjects(AsanaResourceBase):
 
 class AsanaProjectTasks(AsanaResourceBase):
 
-    def __init__(self, client, project, projects_dir):
+    def __init__(self, client, project, projects_dir, force_update=False):
         self.client = client
         self.project = project
         self.root_path = os.path.join(projects_dir, project['gid'])
         self._stats = ExtractorStats()
+        super().__init__(force_update)
 
     @property
     def stats(self):
@@ -212,11 +217,16 @@ class AsanaProjectTasks(AsanaResourceBase):
         time.sleep(0)
         for t in tasks:
             task_path = os.path.join(path, t['gid'])
-            if os.path.exists(task_path):
+            task_json_path = os.path.join(task_path, 'task.json')
+            if os.path.exists(task_json_path):
                 continue
 
             if not os.path.isdir(task_path):
                 os.makedirs(task_path)
+
+            fulltask = self.client.tasks.find_by_id(t['gid'])
+            with open(task_json_path, 'w') as fd:
+                fd.write(json.dumps(fulltask))
 
         with open(os.path.join(self.root_path, 'tasks.json'), 'w') as fd:
             fd.write(json.dumps(tasks))
@@ -227,13 +237,15 @@ class AsanaProjectTasks(AsanaResourceBase):
 
 class AsanaTaskSubTasks(AsanaResourceBase):
 
-    def __init__(self, client, project, projects_dir, task):
+    def __init__(self, client, project, projects_dir, task,
+                 force_update=False):
         self.client = client
         self.project = project
         self.task = task
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
         self._stats = ExtractorStats()
+        super().__init__(force_update)
 
     @property
     def stats(self):
@@ -273,11 +285,16 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         time.sleep(0)
         for t in subtasks:
             task_path = os.path.join(path, t['gid'])
-            if os.path.exists(task_path):
+            task_json_path = os.path.join(task_path, 'subtask.json')
+            if os.path.exists(task_json_path):
                 continue
 
             if not os.path.isdir(task_path):
                 os.makedirs(task_path)
+
+            fulltask = self.client.tasks.find_by_id(t['gid'])
+            with open(task_json_path, 'w') as fd:
+                fd.write(json.dumps(fulltask))
 
         with open(os.path.join(self.root_path, 'subtasks.json'),
                   'w') as fd:
@@ -289,13 +306,15 @@ class AsanaTaskSubTasks(AsanaResourceBase):
 
 class AsanaProjectTaskStories(AsanaResourceBase):
 
-    def __init__(self, client, project, projects_dir, task):
+    def __init__(self, client, project, projects_dir, task,
+                 force_update=False):
         self.client = client
         self.project = project
         self.task = task
         self.root_path = os.path.join(projects_dir, project['gid'],
                                       'tasks', task['gid'])
         self._stats = ExtractorStats()
+        super().__init__(force_update)
 
     @property
     def stats(self):
@@ -347,7 +366,8 @@ class AsanaProjectTaskStories(AsanaResourceBase):
 
 class AsanaProjectTaskAttachments(AsanaResourceBase):
 
-    def __init__(self, client, project, projects_dir, task, subtask=None):
+    def __init__(self, client, project, projects_dir, task, subtask=None,
+                 force_update=False):
         self.client = client
         self.project = project
         self._task = task
@@ -358,6 +378,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
             self.root_path = os.path.join(self.root_path, 'subtasks',
                                           subtask['gid'])
         self._stats = ExtractorStats()
+        super().__init__(force_update)
 
     @property
     def stats(self):
@@ -444,20 +465,22 @@ class AsanaExtractor(object):
 
     def __init__(self, token, workspace, teamname, export_path,
                  project_include_filter=None,
-                 project_exclude_filter=None):
+                 project_exclude_filter=None, force_update=False):
         self._workspace = workspace
         self.teamname = teamname
         self.export_path = export_path
         self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
         self.token = token
+        self.force_update = force_update
         if not os.path.isdir(self.export_path):
             os.makedirs(self.export_path)
 
     @cached_property
     @utils.required({'token': '--token'})
     def client(self):
-        return asana.Client.access_token(self.token)
+        headers = {"Asana-Enable": "new_user_task_lists"}
+        return asana.Client(headers=headers).access_token(self.token)
 
     @cached_property
     @utils.required({'_workspace': '--workspace'})
@@ -534,7 +557,7 @@ class AsanaExtractor(object):
         ap = AsanaProjects(self.client, self.workspace, self.team,
                            self.project_include_filter,
                            self.project_exclude_filter,
-                           self.projects_json)
+                           self.projects_json, force_update=self.force_update)
         projects = ap.get(*args, **kwargs)
         return projects, ap.stats
 
@@ -568,7 +591,8 @@ class AsanaExtractor(object):
         """
         @param update_from_api: allow fetching from the API.
         """
-        apt = AsanaProjectTasks(self.client, project, self.projects_dir)
+        apt = AsanaProjectTasks(self.client, project, self.projects_dir,
+                                force_update=self.force_update)
         tasks = apt.get(*args, **kwargs)
         return tasks, apt.stats
 
@@ -579,7 +603,7 @@ class AsanaExtractor(object):
         """
         event.clear()
         atst = AsanaTaskSubTasks(self.client, project, self.projects_dir,
-                                 task)
+                                 task, force_update=self.force_update)
         atst.get(*args, **kwargs)
         # notify any waiting threads that subtasks are now available.
         event.set()
@@ -591,7 +615,7 @@ class AsanaExtractor(object):
         @param update_from_api: allow fetching from the API.
         """
         ats = AsanaProjectTaskStories(self.client, project, self.projects_dir,
-                                      task)
+                                      task, force_update=self.force_update)
         ats.get(*args, **kwargs)
         stats_queue.put(ats.stats)
 
@@ -601,7 +625,8 @@ class AsanaExtractor(object):
         @param update_from_api: allow fetching from the API.
         """
         ata = AsanaProjectTaskAttachments(self.client, project,
-                                          self.projects_dir, task)
+                                          self.projects_dir, task,
+                                          force_update=self.force_update)
         ata.get(*args, **kwargs)
         stats_queue.put(ata.stats)
 
@@ -614,7 +639,7 @@ class AsanaExtractor(object):
             time.sleep(1)
 
         st_obj = AsanaTaskSubTasks(self.client, project, self.projects_dir,
-                                   task)
+                                   task, force_update=self.force_update)
         subtasks = st_obj.get(*args, **kwargs)
         stats = st_obj.stats
         stats['num_subtask_attachments'] = 0
@@ -627,7 +652,8 @@ class AsanaExtractor(object):
         for subtask in subtasks:
             asta = AsanaProjectTaskAttachments(self.client, project,
                                                self.projects_dir, task,
-                                               subtask)
+                                               subtask,
+                                               force_update=self.force_update)
             attachments.extend(asta.get(*args, **kwargs))
             stats['num_subtask_attachments'] += asta.stats['num_attachments']
 
@@ -700,6 +726,9 @@ def main():
     parser.add_argument('--export-path', type=str,
                         default='asana_export', required=False,
                         help="Path where data is saved.")
+    parser.add_argument('--force-update', action='store_true',
+                        default=False, required=False,
+                        help="Force updates to existing resources.")
     parser.add_argument('--exclude-projects', type=str,
                         default=None,
                         help=("Regular expression filter used to exclude "
@@ -736,7 +765,8 @@ def main():
     ae = AsanaExtractor(token=args.token, workspace=args.workspace,
                         teamname=args.team, export_path=args.export_path,
                         project_include_filter=args.project_filter,
-                        project_exclude_filter=args.exclude_projects)
+                        project_exclude_filter=args.exclude_projects,
+                        force_update=args.force_update)
     if args.list_teams:
         teams, stats = ae.get_teams(readonly=True)
         LOG.debug("stats: {}".format(stats))
