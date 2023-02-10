@@ -2,6 +2,7 @@
 import abc
 import argparse
 import collections
+import concurrent.futures
 import os
 import queue
 import re
@@ -23,6 +24,7 @@ class AsanaResourceBase(abc.ABC):
 
     def __init__(self, force_update=False):
         self.force_update = force_update
+        self.export_semaphone = threading.Semaphore()
 
     @abc.abstractproperty
     def _local_store(self):
@@ -44,16 +46,34 @@ class AsanaResourceBase(abc.ABC):
         """ Fetch resources from the local cache/export. """
 
     @utils.with_lock
+    def _export_write_locked(self, path, data):
+        with open(path, 'w') as fd:
+            fd.write(data)
+
+    @utils.with_lock
+    def _export_read_locked(self, path):
+        """ read from export """
+        with open(path, 'r') as fd:
+            return fd.read()
+
     def get(self, update_from_api=True, prefer_cache=True, readonly=False):
         if prefer_cache and not self.force_update:
+            while self.export_semaphone._value == 0:
+                update_from_api = False
+                time.sleep(1)
+
             objs = self._from_local()
         else:
             objs = []
 
-        if not objs and update_from_api:
-            objs = self._from_api(readonly=readonly)
+        if not objs and (update_from_api or self.force_update):
+            with self.export_semaphone:
+                objs = self._from_api(readonly=readonly)
 
         if not objs and not prefer_cache:
+            while self.export_semaphone._value == 0:
+                time.sleep(1)
+
             objs = self._from_local()
 
         return objs
@@ -111,9 +131,7 @@ class AsanaProjects(AsanaResourceBase):
             LOG.debug("no cached projects to list")
             return projects
 
-        with open(self._local_store) as fd:
-            projects = json.loads(fd.read())
-
+        projects = json.loads(self._export_read_locked(self._local_store))
         self.stats['num_projects'] = len(projects)
         return projects
 
@@ -163,8 +181,7 @@ class AsanaProjects(AsanaResourceBase):
                         projects.append(p)
             """
 
-            with open(self.projects_json, 'w') as fd:
-                fd.write(json.dumps(projects))
+            self._export_write_locked(self._local_store, json.dumps(projects))
 
         self.stats['num_projects'] = len(projects)
         return projects
@@ -194,8 +211,7 @@ class AsanaProjectTasks(AsanaResourceBase):
 
         LOG.debug("fetching tasks for project '{}' (gid={}) from cache".
                   format(self.project['name'], self.project['gid']))
-        with open(self._local_store) as fd:
-            tasks = json.loads(fd.read())
+        tasks = json.loads(self._export_read_locked(self._local_store))
 
         LOG.debug("fetched {} tasks".format(len(tasks)))
         self.stats['num_tasks'] = len(tasks)
@@ -225,12 +241,9 @@ class AsanaProjectTasks(AsanaResourceBase):
                 os.makedirs(task_path)
 
             fulltask = self.client.tasks.find_by_id(t['gid'])
-            with open(task_json_path, 'w') as fd:
-                fd.write(json.dumps(fulltask))
+            self._export_write_locked(task_json_path, json.dumps(fulltask))
 
-        with open(os.path.join(self.root_path, 'tasks.json'), 'w') as fd:
-            fd.write(json.dumps(tasks))
-
+        self._export_write_locked(self._local_store, json.dumps(tasks))
         self.stats['num_tasks'] = len(tasks)
         return tasks
 
@@ -262,8 +275,7 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         if os.path.exists(self._local_store):
             LOG.debug("fetching subtasks for task '{}' (project={}) from "
                       "cache".format(t_name, p_gid))
-            with open(os.path.join(self.root_path, 'subtasks.json')) as fd:
-                subtasks = json.loads(fd.read())
+            subtasks = json.loads(self._export_read_locked(self._local_store))
 
         self.stats['num_subtasks'] = len(subtasks)
         return subtasks
@@ -293,12 +305,9 @@ class AsanaTaskSubTasks(AsanaResourceBase):
                 os.makedirs(task_path)
 
             fulltask = self.client.tasks.find_by_id(t['gid'])
-            with open(task_json_path, 'w') as fd:
-                fd.write(json.dumps(fulltask))
+            self._export_write_locked(task_json_path, json.dumps(fulltask))
 
-        with open(os.path.join(self.root_path, 'subtasks.json'),
-                  'w') as fd:
-            fd.write(json.dumps(subtasks))
+        self._export_write_locked(self._local_store, json.dumps(subtasks))
 
         self.stats['num_subtasks'] = len(subtasks)
         return subtasks
@@ -331,8 +340,7 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         if os.path.exists(self._local_store):
             LOG.debug("fetching stories for task '{}' (project={}) from cache".
                       format(t_name, p_gid))
-            with open(os.path.join(self.root_path, 'stories.json')) as fd:
-                stories = json.loads(fd.read())
+            stories = json.loads(self._export_read_locked(self._local_store))
 
         self.stats['num_stories'] = len(stories)
         return stories
@@ -353,13 +361,10 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         # yield
         time.sleep(0)
         for s in stories:
-            with open(os.path.join(path, s['gid']), 'w') as fd:
-                fd.write(json.dumps(s))
+            self._export_write_locked(os.path.join(path, s['gid']),
+                                      json.dumps(s))
 
-        with open(os.path.join(self.root_path, 'stories.json'),
-                  'w') as fd:
-            fd.write(json.dumps(stories))
-
+        self._export_write_locked(self._local_store, json.dumps(stories))
         self.stats['num_stories'] = len(stories)
         return stories
 
@@ -416,8 +421,8 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         if os.path.exists(self._local_store):
             LOG.debug("fetching attachments for {}task '{}' (project={}) from "
                       "cache".format(t_type, t_name, p_gid))
-            with open(self._local_store) as fd:
-                attachments = json.loads(fd.read())
+            attachments = json.loads(self._export_read_locked(
+                                                            self._local_store))
 
         self.stats['num_attachments'] = len(attachments)
         return attachments
@@ -453,10 +458,7 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
                                                 "{}_{}".format(s['gid'],
                                                                'download')))
 
-        with open(os.path.join(self.root_path, 'attachments.json'),
-                  'w') as fd:
-            fd.write(json.dumps(attachments))
-
+        self._export_write_locked(self._local_store, json.dumps(attachments))
         self.stats['num_attachments'] = len(attachments)
         return attachments
 
@@ -479,7 +481,7 @@ class AsanaExtractor(object):
     @cached_property
     @utils.required({'token': '--token'})
     def client(self):
-        headers = {"Asana-Enable": "new_user_task_lists"}
+        headers = {"Asana-Enable": ["new_user_task_lists"]}
         return asana.Client(headers=headers).access_token(self.token)
 
     @cached_property
@@ -500,6 +502,7 @@ class AsanaExtractor(object):
     def teams_json(self):
         return os.path.join(self.export_path, 'teams.json')
 
+    @utils.with_lock
     def get_teams(self, readonly=False):
         stats = ExtractorStats()
         teams = []
@@ -668,39 +671,32 @@ class AsanaExtractor(object):
             os.makedirs(self.export_path_team)
 
         self.get_project_templates()
-        threads = []
         projects, stats = self.get_projects(prefer_cache=False)
         stats_queue = queue.Queue()
         for p in projects:
             LOG.info("extracting project {}".format(p['name']))
             tasks, task_stats = self.get_project_tasks(p)
             stats.combine(task_stats)
-            for t in tasks:
-                thread = threading.Thread(target=self.get_task_stories,
-                                          args=[p, t, stats_queue])
-                thread.start()
-                threads.append(thread)
 
-                event = threading.Event()
-                thread = threading.Thread(target=self.get_task_subtasks,
-                                          args=[p, t, event, stats_queue])
-                thread.start()
-                threads.append(thread)
+            jobs = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as \
+                    executor:
+                for t in tasks:
+                    jobs[executor.submit(self.get_task_stories,
+                                         p, t, stats_queue)] = t['name']
 
-                thread = threading.Thread(target=self.get_task_attachments,
-                                          args=[p, t, stats_queue])
-                thread.start()
-                threads.append(thread)
+                    jobs[executor.submit(self.get_task_attachments,
+                                         p, t, stats_queue)] = t['name']
+                    event = threading.Event()
+                    jobs[executor.submit(self.get_task_subtasks,
+                                         p, t, event, stats_queue)] = t['name']
+                    jobs[executor.submit(self.get_subtask_attachments,
+                                         p, t, event, stats_queue)] = t['name']
 
-                thread = threading.Thread(target=self.get_subtask_attachments,
-                                          args=[p, t, event, stats_queue])
-                thread.start()
-                threads.append(thread)
+                for job in concurrent.futures.as_completed(jobs):
+                    job.result()
 
-        for t in threads:
-            t.join()
-
-        LOG.info("project extraction complete.")
+        LOG.info("completed extraction of {} projects.".format(len(projects)))
         while not stats_queue.empty():
             _stats = stats_queue.get()
             stats.combine(_stats)

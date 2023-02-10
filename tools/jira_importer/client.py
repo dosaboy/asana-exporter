@@ -15,13 +15,14 @@ class JiraImporter(object):
 
     def __init__(self, auth_token, auth_email, source, target_project,
                  asana_team, asana_project, project_include_filter,
-                 project_exclude_filter,):
+                 project_exclude_filter, import_label):
         self.source = source
         self.target_project = target_project
         self.asana_team = asana_team
         self.asana_project = asana_project
         self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
+        self.import_label = import_label
         self._jira = JIRA(server="https://warthogs.atlassian.net",
                           basic_auth=(auth_email,
                                       auth_token))
@@ -171,9 +172,14 @@ class JiraImporter(object):
 
             LOG.info("creating subtask from asana task subtask '{}'".
                      format(ast['name']))
+            labels = None
+            if self.import_label:
+                labels = [self.import_label]
+
             subtask = self.jira.create_issue(
                                         project=self.project.key,
                                         description=desc,
+                                        labels=labels,
                                         summary=summary,
                                         issuetype={'name': 'Sub-task'},
                                         parent={'key': jira_task.key})
@@ -202,8 +208,13 @@ class JiraImporter(object):
                 format(self.asana_team, pname))
 
         if task is None:
+            labels = None
+            if self.import_label:
+                labels = [self.import_label]
+
             LOG.info("creating task '{}'".format(pname))
             task = self.jira.create_issue(project=self.project.key,
+                                          labels=labels,
                                           summary=pname,
                                           description=desc,
                                           issuetype={'name': 'Task'})
@@ -293,7 +304,7 @@ class JiraImporter(object):
 
         LOG.info("importing data from {}".format(self.source))
         jobs = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             for pname, ppath in self.asana_projects:
                 if self.project_include_filter:
                     if not re.search(self.project_include_filter, pname):
@@ -340,6 +351,9 @@ def main():
                         default=None,
                         help=("Regular expression filter used to include "
                               "projects."))
+    parser.add_argument('--import-label', type=str,
+                        default=None,
+                        help=("Tag imported resources with this label."))
 
     args = parser.parse_args()
     if args.debug:
@@ -349,7 +363,8 @@ def main():
                       args.jira_project,
                       args.asana_team, args.asana_project,
                       project_include_filter=args.project_filter,
-                      project_exclude_filter=args.exclude_projects)
+                      project_exclude_filter=args.exclude_projects,
+                      import_label=args.import_label)
     ji.import_data()
 
 
