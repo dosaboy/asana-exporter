@@ -47,12 +47,20 @@ class AsanaResourceBase(abc.ABC):
 
     @utils.with_lock
     def _export_write_locked(self, path, data):
+        if not os.path.isdir(os.path.dirname(path)):
+            LOG.debug("write path not found {}".format(os.path.dirname(path)))
+            return
+
         with open(path, 'w') as fd:
             fd.write(data)
 
     @utils.with_lock
     def _export_read_locked(self, path):
         """ read from export """
+        if not os.path.exists(path):
+            LOG.debug("read path not found {}".format(path))
+            return
+
         with open(path, 'r') as fd:
             return fd.read()
 
@@ -127,11 +135,11 @@ class AsanaProjects(AsanaResourceBase):
         projects = []
         LOG.debug("fetching projects for team '{}' from cache".
                   format(self.team['name']))
-        if not os.path.exists(self._local_store):
-            LOG.debug("no cached projects to list")
-            return projects
+        projects = self._export_read_locked(self._local_store)
+        if not projects:
+            return []
 
-        projects = json.loads(self._export_read_locked(self._local_store))
+        projects = json.loads(projects)
         self.stats['num_projects'] = len(projects)
         return projects
 
@@ -205,14 +213,13 @@ class AsanaProjectTasks(AsanaResourceBase):
         return os.path.join(self.root_path, 'tasks.json')
 
     def _from_local(self):
-        tasks = []
-        if not os.path.exists(self._local_store):
-            return tasks
-
         LOG.debug("fetching tasks for project '{}' (gid={}) from cache".
                   format(self.project['name'], self.project['gid']))
-        tasks = json.loads(self._export_read_locked(self._local_store))
+        tasks = self._export_read_locked(self._local_store)
+        if not tasks:
+            return []
 
+        tasks = json.loads(tasks)
         LOG.debug("fetched {} tasks".format(len(tasks)))
         self.stats['num_tasks'] = len(tasks)
         return tasks
@@ -269,14 +276,15 @@ class AsanaTaskSubTasks(AsanaResourceBase):
         return os.path.join(self.root_path, 'subtasks.json')
 
     def _from_local(self):
-        subtasks = []
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
-        if os.path.exists(self._local_store):
-            LOG.debug("fetching subtasks for task '{}' (project={}) from "
-                      "cache".format(t_name, p_gid))
-            subtasks = json.loads(self._export_read_locked(self._local_store))
+        LOG.debug("fetching subtasks for task '{}' (project={}) from "
+                  "cache".format(t_name, p_gid))
+        subtasks = self._export_read_locked(self._local_store)
+        if not subtasks:
+            return []
 
+        subtasks = json.loads(subtasks)
         self.stats['num_subtasks'] = len(subtasks)
         return subtasks
 
@@ -334,14 +342,15 @@ class AsanaProjectTaskStories(AsanaResourceBase):
         return os.path.join(self.root_path, 'stories.json')
 
     def _from_local(self):
-        stories = []
         p_gid = self.project['gid'].strip()
         t_name = self.task['name'].strip()
-        if os.path.exists(self._local_store):
-            LOG.debug("fetching stories for task '{}' (project={}) from cache".
-                      format(t_name, p_gid))
-            stories = json.loads(self._export_read_locked(self._local_store))
+        LOG.debug("fetching stories for task '{}' (project={}) from cache".
+                  format(t_name, p_gid))
+        stories = self._export_read_locked(self._local_store)
+        if not stories:
+            return []
 
+        stories = json.loads(stories)
         self.stats['num_stories'] = len(stories)
         return stories
 
@@ -418,12 +427,13 @@ class AsanaProjectTaskAttachments(AsanaResourceBase):
         if self._subtask:
             t_type = "sub"
 
-        if os.path.exists(self._local_store):
-            LOG.debug("fetching attachments for {}task '{}' (project={}) from "
-                      "cache".format(t_type, t_name, p_gid))
-            attachments = json.loads(self._export_read_locked(
-                                                            self._local_store))
+        LOG.debug("fetching attachments for {}task '{}' (project={}) from "
+                  "cache".format(t_type, t_name, p_gid))
+        attachments = self._export_read_locked(self._local_store)
+        if not attachments:
+            return []
 
+        attachments = json.loads(attachments)
         self.stats['num_attachments'] = len(attachments)
         return attachments
 
@@ -493,10 +503,11 @@ class AsanaExtractor(object):
         try:
             return int(self._workspace)
         except ValueError:
-            LOG.info("resolving workspace gid from name '{}'".
-                     format(self._workspace))
-            return [w['gid'] for w in self.client.workspaces.find_all()
-                    if w['name'] == self._workspace][0]
+            ws = [w['gid'] for w in self.client.workspaces.find_all()
+                  if w['name'] == self._workspace][0]
+            LOG.info("resolved workspace name '{}' to gid '{}'".
+                     format(self._workspace, ws))
+            return ws
 
     @property
     def teams_json(self):
