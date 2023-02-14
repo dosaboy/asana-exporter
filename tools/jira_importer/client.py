@@ -136,19 +136,16 @@ class JiraImporter(object):
 
         LOG.debug("asana {}task '{}' has '{}' attachments".
                   format(ttype, task['name'], len(attachments)))
-        # NOTE: this does not always work for some reason
-        if hasattr(subtask.fields, 'attachment'):
-            existing = [a.filename for a in subtask.fields.attachment]
-        else:
-            existing = []
 
+        issue = self.jira.issue(subtask.key)
+        existing = [str(a.filename) for a in issue.fields.attachment]
         for attachment in attachments:
             LOG.info("adding attachment '{}' to subtask".
                      format(attachment['name']))
             with open(attachment['local_path'], 'rb') as fd:
-                if fd.name in existing:
+                if attachment['name'] in existing:
                     LOG.debug("attachment with filename '{}' already exists - "
-                              "skipping".format(fd.name))
+                              "skipping".format(attachment['name']))
                     continue
 
                 LOG.info("attaching name={} file={}".
