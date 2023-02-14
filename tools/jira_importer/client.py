@@ -14,12 +14,11 @@ from asana_exporter.utils import LOG, with_lock
 class JiraImporter(object):
 
     def __init__(self, auth_token, auth_email, source, target_project,
-                 asana_team, asana_project, project_include_filter,
+                 asana_team, project_include_filter,
                  project_exclude_filter, import_label):
         self.source = source
         self.target_project = target_project
         self.asana_team = asana_team
-        self.asana_project = asana_project
         self.project_include_filter = project_include_filter
         self.project_exclude_filter = project_exclude_filter
         self.import_label = import_label
@@ -137,13 +136,23 @@ class JiraImporter(object):
 
         LOG.debug("asana {}task '{}' has '{}' attachments".
                   format(ttype, task['name'], len(attachments)))
+        # NOTE: this does not always work for some reason
+        if hasattr(subtask.fields, 'attachment'):
+            existing = [a.filename for a in subtask.fields.attachment]
+        else:
+            existing = []
 
         for attachment in attachments:
             LOG.info("adding attachment '{}' to subtask".
                      format(attachment['name']))
             with open(attachment['local_path'], 'rb') as fd:
-                LOG.debug("attaching name={} file={}".
-                          format(attachment['name'], fd.name))
+                if fd.name in existing:
+                    LOG.debug("attachment with filename '{}' already exists - "
+                              "skipping".format(fd.name))
+                    continue
+
+                LOG.info("attaching name={} file={}".
+                         format(attachment['name'], fd.name))
                 self.jira.add_attachment(subtask, fd, attachment['name'])
 
     def sanitise_summary(self, summary):
@@ -165,32 +174,53 @@ class JiraImporter(object):
                     subtask = _st
                     break
 
+            create = True
             if subtask:
                 LOG.debug("subtask for asana subtask '{}' already exists "
                           "- skipping create".format(ast['name']))
-                continue
+                current_status = str(subtask.fields.status)
+                if current_status != 'Backlog':
+                    LOG.debug("subtask has status '{}' - needs to be "
+                              "'Backlog' to apply updates "
+                              "- skipping update".format(current_status))
+                    continue
 
-            LOG.info("creating subtask from asana task subtask '{}'".
-                     format(ast['name']))
+                create = False
+
             labels = None
             if self.import_label:
                 labels = [self.import_label]
 
-            subtask = self.jira.create_issue(
-                                        project=self.project.key,
-                                        description=desc,
-                                        labels=labels,
-                                        summary=summary,
-                                        issuetype={'name': 'Sub-task'},
-                                        parent={'key': jira_task.key})
+            if create:
+                LOG.info("creating subtask from asana task subtask '{}'".
+                         format(ast['name']))
+
+                subtask = self.jira.create_issue(
+                                            project=self.project.key,
+                                            description=desc,
+                                            labels=labels,
+                                            summary=summary,
+                                            issuetype={'name': 'Sub-task'},
+                                            parent={'key': jira_task.key})
+            else:
+                LOG.info("updating subtask from asana task subtask '{}'".
+                         format(ast['name']))
+
+                subtask.fields.description = desc
+                subtask.fields.labels = labels
+                subtask.fields.summary = summary
+
             try:
-                self.add_comments_to_subtask(subtask, ppath, at, ast)
+                if create:
+                    self.add_comments_to_subtask(subtask, ppath, at, ast)
+
                 self.add_attachments_to_subtask(subtask, ppath, at, ast)
                 self.jira.transition_issue(subtask, 'DONE')
-            except Exception:
-                LOG.error("failed to import task '{}' subtask '{}'".
-                          format(at['gid'], ast['gid']))
-                subtask.delete()
+            except Exception as exc:
+                LOG.error("failed to import task '{}' subtask '{}': {}".
+                          format(at['gid'], ast['gid'], exc))
+                if create:
+                    subtask.delete()
 
     def _import_asana_project(self, pname, ppath):
         asana_tasks = self.asana_project_tasks(ppath)
@@ -207,11 +237,11 @@ class JiraImporter(object):
         desc = ("Imported from Asana team '{}' project '{}'".
                 format(self.asana_team, pname))
 
-        if task is None:
-            labels = None
-            if self.import_label:
-                labels = [self.import_label]
+        labels = None
+        if self.import_label:
+            labels = [self.import_label]
 
+        if task is None:
             LOG.info("creating task '{}'".format(pname))
             task = self.jira.create_issue(project=self.project.key,
                                           labels=labels,
@@ -244,7 +274,18 @@ class JiraImporter(object):
                     subtask = _st
                     break
 
-            if not subtask:
+            create = True
+            if subtask:
+                current_status = str(subtask.fields.status)
+                if current_status != 'Backlog':
+                    LOG.debug("subtask has status '{}' - needs to be "
+                              "'Backlog' to apply updates "
+                              "- skipping update".format(current_status))
+                    continue
+
+                create = False
+
+            if create:
                 LOG.info("creating subtask '{}'". format(summary))
                 subtask = self.jira.create_issue(
                                             project=self.project.key,
@@ -252,12 +293,24 @@ class JiraImporter(object):
                                             summary=summary,
                                             issuetype={'name': 'Sub-task'},
                                             parent={'key': task.key})
-                try:
+            else:
+                LOG.info("updating subtask from asana task '{}'".
+                         format(at['name']))
+
+                subtask.fields.description = desc
+                subtask.fields.labels = labels
+                subtask.fields.summary = summary
+
+            try:
+                if create:
                     self.add_comments_to_subtask(subtask, ppath, at)
-                    self.add_attachments_to_subtask(subtask, ppath, at)
-                    self.jira.transition_issue(subtask, 'DONE')
-                except Exception:
-                    LOG.error("failed to import task '{}'".format(at['gid']))
+
+                self.add_attachments_to_subtask(subtask, ppath, at)
+                self.jira.transition_issue(subtask, 'DONE')
+            except Exception as exc:
+                LOG.error("failed to import task '{}': {}".format(at['gid'],
+                                                                  exc))
+                if create:
                     subtask.delete()
             else:
                 LOG.debug("subtask '{}' already exists - skipping create".
@@ -299,10 +352,13 @@ class JiraImporter(object):
             LOG.warning("path not found {}".format(self.source))
             return
 
-        LOG.info("pre-loading issues")
+        LOG.info("importing Asana team '{}' from {}".format(self.asana_team,
+                                                            self.source))
+
+        LOG.info("pre-loading issues for Jira project '{}'".
+                 format(self.target_project))
         self.project_issues
 
-        LOG.info("importing data from {}".format(self.source))
         jobs = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             for pname, ppath in self.asana_projects:
@@ -336,8 +392,6 @@ def main():
                         default=None, help="Jira api email")
     parser.add_argument('--asana-team', type=str,
                         default=None, help="Asana Team")
-    parser.add_argument('--asana-project', type=str,
-                        default=None, help="Asana Project")
     parser.add_argument('--jira-project', type=str,
                         default=None, help="Jira project")
     parser.add_argument('--export-path', type=str,
@@ -361,7 +415,7 @@ def main():
 
     ji = JiraImporter(args.token, args.email, args.export_path,
                       args.jira_project,
-                      args.asana_team, args.asana_project,
+                      args.asana_team,
                       project_include_filter=args.project_filter,
                       project_exclude_filter=args.exclude_projects,
                       import_label=args.import_label)

@@ -131,6 +131,21 @@ class AsanaProjects(AsanaResourceBase):
     def _local_store(self):
         return self.projects_json
 
+    def _filter_projects(self, projects):
+        _projects = []
+        for p in projects:
+            if self.project_include_filter:
+                if not re.search(self.project_include_filter, p['name']):
+                    continue
+
+            if self.project_exclude_filter:
+                if re.search(self.project_exclude_filter, p['name']):
+                    continue
+
+            _projects.append(p)
+
+        return _projects
+
     def _from_local(self):
         projects = []
         LOG.debug("fetching projects for team '{}' from cache".
@@ -139,7 +154,7 @@ class AsanaProjects(AsanaResourceBase):
         if not projects:
             return []
 
-        projects = json.loads(projects)
+        projects = self._filter_projects(json.loads(projects))
         self.stats['num_projects'] = len(projects)
         return projects
 
@@ -153,18 +168,11 @@ class AsanaProjects(AsanaResourceBase):
                                                   workspace=self.workspace,
                                                   team=self.team['gid']):
             total += 1
-            if self.project_include_filter:
-                if not re.search(self.project_include_filter, p['name']):
-                    ignored.append(p['name'])
-                    continue
-
-            if self.project_exclude_filter:
-                if re.search(self.project_exclude_filter, p['name']):
-                    ignored.append(p['name'])
-                    continue
-
             projects.append(p)
 
+        all_projects = projects
+        projects = self._filter_projects(projects)
+        ignored = [p['name'] for p in all_projects if p not in projects]
         if ignored:
             LOG.info("ignoring projects:\n  {}".
                      format('\n  '.join(ignored)))
