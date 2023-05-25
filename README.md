@@ -4,6 +4,13 @@ Exports Asana projects along with their resources such as tasks, stories and att
 
 ## Install
 
+From pypi:
+
+```
+sudo apt install python3-pip
+pip install asana-exporter
+```
+
 From snap:
 
 ```
